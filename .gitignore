@@ -1,0 +1,12 @@
+/target/
+/.mise/
+/.idea/
+/.vscode/
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+Desktop.ini
+$null
+nul

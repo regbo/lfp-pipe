@@ -1,0 +1,8 @@
+client_id = "client-a"
+nats_url = "nats://nats:guest@nats.reg.bo:4222"
+request_subject = "tunnel.connect.request"
+claim_ack_timeout_ms = 1500
+
+[[backend_rules]]
+pattern = ""
+backend_addr = ":5201"

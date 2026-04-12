@@ -1,0 +1,172 @@
+use std::{path::Path, time::Duration};
+
+use anyhow::{Context, anyhow};
+use async_nats::{Client, Message};
+use futures::StreamExt;
+use shared::{
+    config::{BackendRule, ClientConfig, load_client_config},
+    io::copy_bidirectional,
+    nats::connect_nats,
+    prefix::PrefixEnvelope,
+    protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
+    routing::select_backend,
+};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    time::timeout,
+};
+use tracing::{debug, info, warn};
+
+#[derive(Clone)]
+struct AppState {
+    config: ClientConfig,
+    nats: Client,
+}
+
+pub async fn run(config_path: &Path) -> anyhow::Result<()> {
+    init_tracing();
+
+    let config = load_client_config(config_path)?;
+    let nats = connect_nats(&config.nats_url)
+        .await
+        .context("failed to connect to NATS")?;
+    let mut subscriber = nats
+        .subscribe(config.request_subject.clone())
+        .await
+        .context("failed to subscribe to request subject")?;
+
+    let state = AppState { config, nats };
+    info!(
+        client_id = state.config.client_id,
+        "client listening for tunnel requests"
+    );
+
+    while let Some(message) = subscriber.next().await {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_request(message, state).await {
+                warn!(?error, "client request handling failed");
+            }
+        });
+    }
+
+    Ok(())
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,client=debug,async_nats::connector=warn".into()),
+        )
+        .try_init();
+}
+
+async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()> {
+    let request: ConnectionRequest = decode_json(&message.payload)?;
+    let backend = match select_backend(&state.config.backend_rules, request.hostname.as_deref()) {
+        Some(rule) => rule.clone(),
+        None => {
+            debug!(hostname = request.hostname.as_deref().unwrap_or("<default>"), "request does not match this client");
+            return Ok(());
+        }
+    };
+
+    let ack = submit_claim(&state, &message, &request).await?;
+    if !ack.accepted {
+        return Err(anyhow!(
+            ack.reason.unwrap_or_else(|| "claim rejected".to_string())
+        ));
+    }
+
+    info!(
+        connection_id = %request.connection_id,
+        client_id = %state.config.client_id,
+        backend = %backend.backend_addr,
+        "claim accepted, opening tunnel"
+    );
+    bridge_connection(&state.config.client_id, &request, &backend).await
+}
+
+async fn submit_claim(
+    state: &AppState,
+    message: &Message,
+    request: &ConnectionRequest,
+) -> anyhow::Result<ConnectionClaimAck> {
+    let reply_subject = message
+        .reply
+        .clone()
+        .or_else(|| Some(request.reply_subject.clone().into()))
+        .ok_or_else(|| anyhow!("request missing reply subject"))?;
+
+    let ack_subject = state.nats.new_inbox();
+    let mut ack_subscription = state
+        .nats
+        .subscribe(ack_subject.clone())
+        .await
+        .context("failed to subscribe to claim ack subject")?;
+
+    let claim = ConnectionClaim {
+        client_id: state.config.client_id.clone(),
+        connection_id: request.connection_id.clone(),
+    };
+
+    state
+        .nats
+        .publish_with_reply(reply_subject, ack_subject, encode_json(&claim)?.into())
+        .await
+        .context("failed to publish connection claim")?;
+
+    let ack_message = timeout(
+        Duration::from_millis(state.config.claim_ack_timeout_ms),
+        ack_subscription.next(),
+    )
+    .await
+    .context("timed out waiting for claim ack")?
+    .ok_or_else(|| anyhow!("claim ack subscription ended unexpectedly"))?;
+
+    decode_json(&ack_message.payload)
+}
+
+async fn bridge_connection(
+    client_id: &str,
+    request: &ConnectionRequest,
+    backend: &BackendRule,
+) -> anyhow::Result<()> {
+    let backend_addr = backend.resolved_backend_addr();
+    let mut backend_stream = TcpStream::connect(&backend_addr)
+        .await
+        .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+    let mut server_stream = TcpStream::connect(&request.server_data_addr)
+        .await
+        .with_context(|| format!("failed to connect server {}", request.server_data_addr))?;
+
+    let prefix = PrefixEnvelope::new(client_id, &request.connection_id);
+    server_stream
+        .write_all(&prefix.encode_line()?)
+        .await
+        .context("failed to write prefix envelope")?;
+
+    let (to_server, to_backend) = copy_bidirectional(&mut server_stream, &mut backend_stream)
+        .await
+        .context("copy_bidirectional failed")?;
+    debug!(to_server, to_backend, "client relay finished");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use shared::{config::BackendRule, routing::select_backend};
+
+    #[test]
+    fn selects_matching_backend_rule() {
+        let rules = vec![BackendRule {
+            pattern: "*.example.com".to_string(),
+            backend_addr: "127.0.0.1:443".to_string(),
+        }];
+
+        let selected = select_backend(&rules, Some("api.example.com")).expect("match");
+        assert_eq!(selected.backend_addr, "127.0.0.1:443");
+    }
+}

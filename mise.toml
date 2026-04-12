@@ -1,0 +1,80 @@
+[tools]
+rust = "stable"
+
+[tasks.build]
+description = "Build both Rust binaries"
+depends = ["build:shared", "build:server", "build:client"]
+
+[tasks."build:shared"]
+description = "Build the shared crate"
+run = "cargo build --release -p shared"
+
+[tasks."build:server"]
+description = "Build the server binary"
+run = "cargo build --release -p server"
+
+[tasks."build:client"]
+description = "Build the client binary"
+run = "cargo build --release -p client"
+
+[tasks.nats]
+description = "Start a local NATS server"
+run = "nats-server"
+tools."github:nats-io/nats-server" = "latest"
+
+[tasks.echo]
+description = "Start a local LibreSpeed server in Docker on loopback only"
+run = '''
+docker rm -f regbo-tunnel-librespeed 2>$null && docker run --rm --name regbo-tunnel-librespeed -p 8080:80 -i -e MODE=dual lscr.io/linuxserver/librespeed:latest
+'''
+
+[tasks.caddy]
+description = "Start Caddy as a local TLS frontend for whoami"
+run = "caddy run --watch --config ./Caddyfile"
+tools.caddy = "latest"
+
+[tasks.server]
+description = "Start the Rust server with the example config"
+depends = ["build:server"]
+run = "cargo run --release -p server -- --config ./server.example.toml"
+
+[tasks."server:watch"]
+description = "Watch, check, and rerun the Rust server with the example config"
+tools."cargo:cargo-watch" = "latest"
+run = "cargo watch -x check -x \"run -p server -- --config ./server.example.toml\""
+
+[tasks."server-dev"]
+description = "Start NATS and the Rust server together"
+usage = '''
+flag "--nats" help="Start a local NATS server alongside the Rust server watcher"
+'''
+run = '''
+{% if usage.nats %}
+mise run nats ::: server:watch
+{% else %}
+mise run server:watch
+{% endif %}
+'''
+
+[tasks.client]
+description = "Start the client with the example config"
+depends = ["build:client"]
+run = "cargo run --release -p client -- --config ./client.example.toml"
+
+[tasks."client:watch"]
+description = "Watch, check, and rerun the Rust client with the example config"
+tools."cargo:cargo-watch" = "latest"
+shell = "pwsh -NoLogo -NoProfile -Command"
+run = "cargo watch -x check -x \"run -p client -- --config ./client.example.toml\""
+
+[tasks."client-dev"]
+description = "Start LibreSpeed, Caddy, and the Rust client together"
+run = "mise run echo ::: caddy ::: client:watch"
+
+[tasks.dev]
+description = "Build everything, then show how to start server and client"
+depends = ["build"]
+run = [
+  "echo server stack: mise run server-dev",
+  "echo client stack: mise run client-dev",
+]
