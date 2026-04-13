@@ -22,7 +22,8 @@ pub async fn connect_nats(nats_url: &str) -> anyhow::Result<Client> {
 
     let mut options = ConnectOptions::new()
         .ignore_discovered_servers()
-        .retain_servers_order();
+        .retain_servers_order()
+        .tls_first();
 
     if !parsed.username().is_empty() || parsed.password().is_some() {
         options = options.user_and_password(

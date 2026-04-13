@@ -68,7 +68,17 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
     let backend = match select_backend(&state.config.backend_rules, request.hostname.as_deref()) {
         Some(rule) => rule.clone(),
         None => {
-            debug!(hostname = request.hostname.as_deref().unwrap_or("<default>"), "request does not match this client");
+            let patterns: Vec<&str> = state
+                .config
+                .backend_rules
+                .iter()
+                .map(|rule| rule.pattern.as_str())
+                .collect();
+            debug!(
+                hostname = request.hostname.as_deref().unwrap_or("<default>"),
+                ?patterns,
+                "request does not match this client"
+            );
             return Ok(());
         }
     };
@@ -112,6 +122,12 @@ async fn submit_claim(
         connection_id: request.connection_id.clone(),
     };
 
+    debug!(
+        connection_id = %request.connection_id,
+        reply_subject = %reply_subject,
+        ack_subject = %ack_subject,
+        "submitting tunnel claim"
+    );
     state
         .nats
         .publish_with_reply(reply_subject, ack_subject, encode_json(&claim)?.into())
@@ -126,6 +142,10 @@ async fn submit_claim(
     .context("timed out waiting for claim ack")?
     .ok_or_else(|| anyhow!("claim ack subscription ended unexpectedly"))?;
 
+    debug!(
+        connection_id = %request.connection_id,
+        "received claim ack"
+    );
     decode_json(&ack_message.payload)
 }
 

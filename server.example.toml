@@ -1,7 +1,7 @@
 public_listen = "0.0.0.0:8443"
 data_listen = "0.0.0.0:7001"
-advertised_data_addr = "172.29.105.127:7001"
-nats_url = "nats://nats:guest@nats.reg.bo:4222"
+advertised_data_addr = "127.0.0.1:7001"
+nats_url = "nats://nats:guest@nats.reg.bo:443"
 request_subject = "tunnel.connect.request"
 claim_timeout_ms = 3000
 pending_timeout_ms = 10000

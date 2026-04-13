@@ -25,7 +25,12 @@ tools."github:nats-io/nats-server" = "latest"
 [tasks.echo]
 description = "Start a local LibreSpeed server in Docker on loopback only"
 run = '''
-docker rm -f regbo-tunnel-librespeed 2>$null && docker run --rm --name regbo-tunnel-librespeed -p 8080:80 -i -e MODE=dual lscr.io/linuxserver/librespeed:latest
+if ! command -v docker >/dev/null 2>&1; then
+  docker() { command podman "$@"; }
+fi
+
+(docker rm -f regbo-tunnel-librespeed || true) && \
+docker run --rm --name regbo-tunnel-librespeed -p 8080:80 -i -e MODE=dual lscr.io/linuxserver/librespeed:latest
 '''
 
 [tasks.caddy]
@@ -36,12 +41,12 @@ tools.caddy = "latest"
 [tasks.server]
 description = "Start the Rust server with the example config"
 depends = ["build:server"]
-run = "cargo run --release -p server -- --config ./server.example.toml"
+run = "RUST_LOG=debug cargo run --release -p server -- --config ./server.example.toml"
 
 [tasks."server:watch"]
 description = "Watch, check, and rerun the Rust server with the example config"
 tools."cargo:cargo-watch" = "latest"
-run = "cargo watch -x check -x \"run -p server -- --config ./server.example.toml\""
+run = "RUST_LOG=debug cargo watch -x check -x \"run -p server -- --config ./server.example.toml\""
 
 [tasks."server-dev"]
 description = "Start NATS and the Rust server together"
@@ -59,13 +64,13 @@ mise run server:watch
 [tasks.client]
 description = "Start the client with the example config"
 depends = ["build:client"]
-run = "cargo run --release -p client -- --config ./client.example.toml"
+run = "RUST_LOG=debug cargo run --release -p client -- --config ./client.example.toml"
 
 [tasks."client:watch"]
 description = "Watch, check, and rerun the Rust client with the example config"
 tools."cargo:cargo-watch" = "latest"
-shell = "pwsh -NoLogo -NoProfile -Command"
-run = "cargo watch -x check -x \"run -p client -- --config ./client.example.toml\""
+#shell = "pwsh -NoLogo -NoProfile -Command"
+run = "RUST_LOG=debug cargo watch -x check -x \"run -p client -- --config ./client.example.toml\""
 
 [tasks."client-dev"]
 description = "Start LibreSpeed, Caddy, and the Rust client together"

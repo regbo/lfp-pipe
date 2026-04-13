@@ -2,6 +2,14 @@
 name = "client"
 version = "0.1.0"
 edition = "2024"
+autobins = false
+
+[lib]
+name = "client"
+
+[[bin]]
+name = "lfp-pipe-client"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
