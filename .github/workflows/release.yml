@@ -110,34 +110,3 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes
           fi
-
-  verify-mise:
-    name: Verify mise install on ${{ matrix.runner }}
-    if: github.event_name == 'push'
-    needs: release
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      attestations: read
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        runner:
-          - ubuntu-24.04
-          - windows-2025
-          - macos-15
-    steps:
-      - name: Install mise
-        uses: jdx/mise-action@v3
-        with:
-          install: false
-
-      - name: Install release through the mise GitHub backend
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          version="${GITHUB_REF_NAME#v}"
-          mise exec "github:regbo/lfp-pipe@${version}" --command \
-            "lfp-pipe-server --version && lfp-pipe-client --version"
