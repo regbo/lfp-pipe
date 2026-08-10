@@ -93,7 +93,7 @@ flag "--push" help="Push the new tag to origin after creating it"
 run = '''
 set -eu
 
-level="{{usage.level}}"
+level="${usage_level:-patch}"
 case "$level" in
   patch|minor|major) ;;
   *) echo "level must be patch, minor, or major" >&2; exit 2 ;;
@@ -126,9 +126,10 @@ fi
 
 git tag -a "$next" -m "Release $next"
 echo "created $next from $current"
-{% if usage.push %}
-git push origin "$next"
-{% else %}
-echo "push with: git push origin $next"
-{% endif %}
+if [ "${usage_push:-false}" = "true" ]; then
+  git push origin "$next"
+else
+  echo "push with: git push origin $next"
+fi
 '''
+run_windows = "pwsh -NoLogo -NoProfile -File ./tools/version-bump.ps1"
