@@ -3,7 +3,7 @@
 `lfp-pipe` publishes TCP services that live behind NAT or a firewall. A public
 server accepts ingress traffic, announces it over NATS, and a matching private
 client creates the reverse data connection to the server. The application bytes
-then flow directly through that paired TCP connection; gRPC is not involved.
+then flow directly through that paired TCP connection.
 
 The workspace produces two binaries:
 
