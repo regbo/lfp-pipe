@@ -139,7 +139,27 @@ half-closes, and fallback behavior.
 Pushing a semantic version tag such as `v1.2.3` runs the tagged-release matrix
 for Linux x86-64/ARM64, Windows x86-64/ARM64, and macOS Intel/Apple Silicon.
 Each platform is tested natively, packaged with both binaries, checksummed, and
-attached to a GitHub release.
+attached to a GitHub release. Each archive has a conventional `bin/` directory,
+and the workflow verifies the published release through mise on Linux, Windows,
+and macOS.
+
+Install both binaries from the latest compatible GitHub release:
+
+```text
+mise use -g github:regbo/lfp-pipe
+lfp-pipe-server --help
+lfp-pipe-client --help
+```
+
+If the repository is private, provide mise with GitHub access through its
+normal `GITHUB_TOKEN`, `MISE_GITHUB_TOKEN`, or authenticated GitHub CLI lookup;
+do not put the token in this repository or on the command line.
+
+For an ephemeral pinned invocation, use:
+
+```text
+mise exec github:regbo/lfp-pipe@0.1.0 -- lfp-pipe-server --version
+```
 
 Create the next tag from a clean worktree with:
 

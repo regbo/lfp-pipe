@@ -58,9 +58,9 @@ jobs:
         run: |
           set -eu
           archive="lfp-pipe-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir -p "dist/${archive}"
-          cp "target/${{ matrix.target }}/release/lfp-pipe-server" "dist/${archive}/"
-          cp "target/${{ matrix.target }}/release/lfp-pipe-client" "dist/${archive}/"
+          mkdir -p "dist/${archive}/bin"
+          cp "target/${{ matrix.target }}/release/lfp-pipe-server" "dist/${archive}/bin/"
+          cp "target/${{ matrix.target }}/release/lfp-pipe-client" "dist/${archive}/bin/"
           tar -C dist -czf "dist/${archive}.tar.gz" "${archive}"
           rm -rf "dist/${archive}"
 
@@ -69,9 +69,9 @@ jobs:
         shell: pwsh
         run: |
           $archive = "lfp-pipe-$env:GITHUB_REF_NAME-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force "dist/$archive" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-server.exe" "dist/$archive/"
-          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-client.exe" "dist/$archive/"
+          New-Item -ItemType Directory -Force "dist/$archive/bin" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-server.exe" "dist/$archive/bin/"
+          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-client.exe" "dist/$archive/bin/"
           Compress-Archive -Path "dist/$archive" -DestinationPath "dist/$archive.zip"
           Remove-Item -Recurse -Force "dist/$archive"
 
@@ -104,3 +104,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes
+
+  verify-mise:
+    name: Verify mise install on ${{ matrix.runner }}
+    if: github.event_name == 'push'
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - windows-2025
+          - macos-15
+    steps:
+      - name: Install mise
+        uses: jdx/mise-action@v3
+        with:
+          install: false
+
+      - name: Install release through the mise GitHub backend
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          mise exec "github:regbo/lfp-pipe@${version}" --command \
+            "lfp-pipe-server --version && lfp-pipe-client --version"
