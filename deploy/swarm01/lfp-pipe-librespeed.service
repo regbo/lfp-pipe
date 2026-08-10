@@ -1,0 +1,25 @@
+[Unit]
+Description=lfp-pipe public server for LFPConnect LibreSpeed
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=true
+EnvironmentFile=-/etc/lfp-pipe/lfp-pipe.env
+ExecStart=/opt/lfp-pipe/bin/lfp-pipe-server --config /etc/lfp-pipe/librespeed-server.toml
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,11 +1,15 @@
+//! TLS record validation and Server Name Indication extraction.
+
 use anyhow::{Context, bail};
 
+/// Parse a ClientHello record and return its optional SNI hostname.
 pub fn extract_sni(record_bytes: &[u8]) -> anyhow::Result<Option<String>> {
     let hello =
         clienthello::parse_from_record(record_bytes).context("failed to parse ClientHello")?;
     Ok(hello.server_name().map(ToOwned::to_owned))
 }
 
+/// Check that buffered bytes begin with a TLS handshake record header.
 pub fn validate_tls_record_header(record_bytes: &[u8]) -> anyhow::Result<()> {
     if record_bytes.len() < 5 {
         bail!("TLS record is too short");

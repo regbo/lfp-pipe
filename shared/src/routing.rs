@@ -1,5 +1,8 @@
+//! Ordered hostname matching for private backend selection.
+
 use crate::config::BackendRule;
 
+/// Test an exact, wildcard, or default pattern against a detected hostname.
 pub fn matches_pattern(pattern: &str, hostname: Option<&str>) -> bool {
     if pattern.is_empty() {
         return hostname.is_none();
@@ -18,7 +21,11 @@ pub fn matches_pattern(pattern: &str, hostname: Option<&str>) -> bool {
     pattern.eq_ignore_ascii_case(hostname)
 }
 
-pub fn select_backend<'a>(rules: &'a [BackendRule], hostname: Option<&str>) -> Option<&'a BackendRule> {
+/// Return the first backend rule matching the detected hostname.
+pub fn select_backend<'a>(
+    rules: &'a [BackendRule],
+    hostname: Option<&str>,
+) -> Option<&'a BackendRule> {
     rules
         .iter()
         .find(|rule| matches_pattern(&rule.pattern, hostname))

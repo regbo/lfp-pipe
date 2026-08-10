@@ -1,5 +1,8 @@
+//! Minimal HTTP/1 host detection used before transparent forwarding.
+
+/// Extract a host without its port from a complete HTTP header block.
 pub fn extract_http_host(payload: &[u8]) -> Option<String> {
-    if !looks_like_http(payload) {
+    if !looks_like_http_prefix(payload) {
         return None;
     }
 
@@ -26,7 +29,8 @@ pub fn extract_http_host(payload: &[u8]) -> Option<String> {
     None
 }
 
-fn looks_like_http(payload: &[u8]) -> bool {
+/// Return true when bytes are or could become a supported HTTP request prefix.
+pub fn looks_like_http_prefix(payload: &[u8]) -> bool {
     const METHODS: [&[u8]; 10] = [
         b"GET ",
         b"POST ",
@@ -40,7 +44,9 @@ fn looks_like_http(payload: &[u8]) -> bool {
         b"PRI * HTTP/2.0",
     ];
 
-    METHODS.iter().any(|method| payload.starts_with(method))
+    METHODS
+        .iter()
+        .any(|method| method.starts_with(payload) || payload.starts_with(method))
 }
 
 fn strip_port(host: &str) -> &str {
@@ -53,7 +59,7 @@ fn strip_port(host: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_http_host;
+    use super::{extract_http_host, looks_like_http_prefix};
 
     #[test]
     fn extracts_host_header_without_port() {
@@ -64,5 +70,12 @@ mod tests {
     #[test]
     fn ignores_non_http_payloads() {
         assert_eq!(extract_http_host(b"\x16\x03\x01\x00\x10"), None);
+    }
+
+    #[test]
+    fn recognizes_partial_method_prefixes() {
+        assert!(looks_like_http_prefix(b"GE"));
+        assert!(looks_like_http_prefix(b"GET /"));
+        assert!(!looks_like_http_prefix(b"SSH-2.0"));
     }
 }

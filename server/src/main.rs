@@ -1,15 +1,6 @@
-use std::path::PathBuf;
-
-use clap::Parser;
-
-#[derive(Debug, Parser)]
-struct Cli {
-    #[arg(long)]
-    config: PathBuf,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    server::run(&cli.config).await
+    let runtime = shared::cli::parse_server_runtime()?;
+    shared::logging::init(&runtime.log_filter)?;
+    server::run(runtime.config).await
 }

@@ -1,22 +1,23 @@
-use std::{path::Path, time::Duration};
+//! Private-side tunnel client runtime.
+
+#![warn(missing_docs)]
+
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_nats::{Client, Message};
 use futures::StreamExt;
 use shared::{
-    config::{BackendRule, ClientConfig, load_client_config},
-    io::copy_bidirectional,
+    config::{BackendRule, ClientConfig, RelayMode},
+    io::copy_bidirectional_with_mode,
+    logging::is_expected_disconnect,
     nats::connect_nats,
     prefix::PrefixEnvelope,
     protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
     routing::select_backend,
 };
-use tokio::{
-    io::AsyncWriteExt,
-    net::TcpStream,
-    time::timeout,
-};
-use tracing::{debug, info, warn};
+use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
+use tracing::{Level, debug, enabled, info, warn};
 
 #[derive(Clone)]
 struct AppState {
@@ -24,10 +25,8 @@ struct AppState {
     nats: Client,
 }
 
-pub async fn run(config_path: &Path) -> anyhow::Result<()> {
-    init_tracing();
-
-    let config = load_client_config(config_path)?;
+/// Subscribe for matching requests and bridge accepted tunnels to backends.
+pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
     let nats = connect_nats(&config.nats_url)
         .await
         .context("failed to connect to NATS")?;
@@ -38,7 +37,9 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
 
     let state = AppState { config, nats };
     info!(
-        client_id = state.config.client_id,
+        client_id = %state.config.client_id,
+        request_subject = %state.config.request_subject,
+        backend_rules = state.config.backend_rules.len(),
         "client listening for tunnel requests"
     );
 
@@ -46,7 +47,11 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_request(message, state).await {
-                warn!(?error, "client request handling failed");
+                if is_expected_disconnect(&error) {
+                    debug!(?error, "tunnel peer closed connection");
+                } else {
+                    warn!(?error, "client request handling failed");
+                }
             }
         });
     }
@@ -54,49 +59,53 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,client=debug,async_nats::connector=warn".into()),
-        )
-        .try_init();
-}
-
 async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()> {
     let request: ConnectionRequest = decode_json(&message.payload)?;
     let backend = match select_backend(&state.config.backend_rules, request.hostname.as_deref()) {
         Some(rule) => rule.clone(),
         None => {
-            let patterns: Vec<&str> = state
-                .config
-                .backend_rules
-                .iter()
-                .map(|rule| rule.pattern.as_str())
-                .collect();
-            debug!(
-                hostname = request.hostname.as_deref().unwrap_or("<default>"),
-                ?patterns,
-                "request does not match this client"
-            );
+            // Building the pattern list is diagnostic-only; avoid its
+            // allocation entirely when debug tracing is disabled.
+            if enabled!(Level::DEBUG) {
+                let patterns: Vec<&str> = state
+                    .config
+                    .backend_rules
+                    .iter()
+                    .map(|rule| rule.pattern.as_str())
+                    .collect();
+                debug!(
+                    hostname = request.hostname.as_deref().unwrap_or("<default>"),
+                    ?patterns,
+                    "request does not match this client"
+                );
+            }
             return Ok(());
         }
     };
 
     let ack = submit_claim(&state, &message, &request).await?;
     if !ack.accepted {
-        return Err(anyhow!(
-            ack.reason.unwrap_or_else(|| "claim rejected".to_string())
-        ));
+        debug!(
+            connection_id = %request.connection_id,
+            reason = ack.reason.as_deref().unwrap_or("claim rejected"),
+            "server selected another client"
+        );
+        return Ok(());
     }
 
-    info!(
+    debug!(
         connection_id = %request.connection_id,
         client_id = %state.config.client_id,
         backend = %backend.backend_addr,
         "claim accepted, opening tunnel"
     );
-    bridge_connection(&state.config.client_id, &request, &backend).await
+    bridge_connection(
+        &state.config.client_id,
+        &request,
+        &backend,
+        state.config.relay_mode,
+    )
+    .await
 }
 
 async fn submit_claim(
@@ -153,6 +162,7 @@ async fn bridge_connection(
     client_id: &str,
     request: &ConnectionRequest,
     backend: &BackendRule,
+    relay_mode: RelayMode,
 ) -> anyhow::Result<()> {
     let backend_addr = backend.resolved_backend_addr();
     let mut backend_stream = TcpStream::connect(&backend_addr)
@@ -168,9 +178,10 @@ async fn bridge_connection(
         .await
         .context("failed to write prefix envelope")?;
 
-    let (to_server, to_backend) = copy_bidirectional(&mut server_stream, &mut backend_stream)
-        .await
-        .context("copy_bidirectional failed")?;
+    let (to_server, to_backend) =
+        copy_bidirectional_with_mode(&mut server_stream, &mut backend_stream, relay_mode)
+            .await
+            .context("copy_bidirectional failed")?;
     debug!(to_server, to_backend, "client relay finished");
     Ok(())
 }

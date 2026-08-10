@@ -29,12 +29,12 @@ if ! command -v docker >/dev/null 2>&1; then
   docker() { command podman "$@"; }
 fi
 
-(docker rm -f regbo-tunnel-librespeed || true) && \
-docker run --rm --name regbo-tunnel-librespeed -p 8080:80 -i -e MODE=dual lscr.io/linuxserver/librespeed:latest
+(docker rm -f lfp-pipe-librespeed || true) && \
+docker run --rm --name lfp-pipe-librespeed -p 8080:80 -i -e MODE=dual lscr.io/linuxserver/librespeed:latest
 '''
 
 [tasks.caddy]
-description = "Start Caddy as a local TLS frontend for whoami"
+description = "Start Caddy as the local TLS frontend"
 run = "caddy run --watch --config ./Caddyfile"
 tools.caddy = "latest"
 
@@ -83,3 +83,52 @@ run = [
   "echo server stack: mise run server-dev",
   "echo client stack: mise run client-dev",
 ]
+
+[tasks."version:bump"]
+description = "Create the next annotated semantic-version tag"
+usage = '''
+arg "<level>" help="Version component to increment: patch, minor, or major" default="patch"
+flag "--push" help="Push the new tag to origin after creating it"
+'''
+run = '''
+set -eu
+
+level="{{usage.level}}"
+case "$level" in
+  patch|minor|major) ;;
+  *) echo "level must be patch, minor, or major" >&2; exit 2 ;;
+esac
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "refusing to tag a dirty worktree" >&2
+  exit 1
+fi
+
+current="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+current="${current:-v0.0.0}"
+version="${current#v}"
+major="${version%%.*}"
+remainder="${version#*.}"
+minor="${remainder%%.*}"
+patch="${remainder#*.}"
+
+case "$level" in
+  major) major=$((major + 1)); minor=0; patch=0 ;;
+  minor) minor=$((minor + 1)); patch=0 ;;
+  patch) patch=$((patch + 1)) ;;
+esac
+
+next="v${major}.${minor}.${patch}"
+if git rev-parse --verify --quiet "refs/tags/$next" >/dev/null; then
+  echo "tag already exists: $next" >&2
+  exit 1
+fi
+
+git tag -a "$next" -m "Release $next"
+echo "created $next from $current"
+{% if usage.push %}
+git push origin "$next"
+{% else %}
+echo "push with: git push origin $next"
+{% endif %}
+'''

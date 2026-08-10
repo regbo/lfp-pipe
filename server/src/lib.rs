@@ -1,6 +1,9 @@
+//! Public ingress and callback-pairing server runtime.
+
+#![warn(missing_docs)]
+
 use std::{
     collections::HashMap,
-    path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -9,9 +12,10 @@ use anyhow::{Context, anyhow};
 use async_nats::Client;
 use futures::StreamExt;
 use shared::{
-    config::{ServerConfig, load_server_config},
-    http::extract_http_host,
-    io::copy_bidirectional,
+    config::ServerConfig,
+    http::{extract_http_host, looks_like_http_prefix},
+    io::copy_bidirectional_with_mode,
+    logging::is_expected_disconnect,
     nats::connect_nats,
     prefix::PrefixEnvelope,
     protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
@@ -40,10 +44,8 @@ struct PendingConnection {
     expires_at: Instant,
 }
 
-pub async fn run(config_path: &Path) -> anyhow::Result<()> {
-    init_tracing();
-
-    let config = load_server_config(config_path)?;
+/// Accept public ingress and client callback sockets until either listener fails.
+pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let nats = connect_nats(&config.nats_url)
         .await
         .context("failed to connect to NATS")?;
@@ -61,7 +63,13 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
         route_claim_cursor: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    info!("server listening");
+    info!(
+        public_listen = %state.config.public_listen,
+        data_listen = %state.config.data_listen,
+        advertised_data_addr = %state.config.server_data_addr(),
+        request_subject = %state.config.request_subject,
+        "server listening"
+    );
 
     let public_task = tokio::spawn(accept_public_loop(public_listener, state.clone()));
     let data_task = tokio::spawn(accept_data_loop(data_listener, state));
@@ -69,15 +77,6 @@ pub async fn run(config_path: &Path) -> anyhow::Result<()> {
     public_task.await??;
     data_task.await??;
     Ok(())
-}
-
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,server=debug,async_nats::connector=warn".into()),
-        )
-        .try_init();
 }
 
 async fn accept_public_loop(listener: TcpListener, state: AppState) -> anyhow::Result<()> {
@@ -89,7 +88,11 @@ async fn accept_public_loop(listener: TcpListener, state: AppState) -> anyhow::R
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_ingress(stream, state).await {
-                warn!(%peer, ?error, "ingress connection failed");
+                if is_expected_disconnect(&error) {
+                    debug!(%peer, ?error, "ingress peer closed connection");
+                } else {
+                    warn!(%peer, ?error, "ingress connection failed");
+                }
             }
         });
     }
@@ -104,7 +107,11 @@ async fn accept_data_loop(listener: TcpListener, state: AppState) -> anyhow::Res
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_client_data(stream, state).await {
-                warn!(%peer, ?error, "client data connection failed");
+                if is_expected_disconnect(&error) {
+                    debug!(%peer, ?error, "callback peer closed connection");
+                } else {
+                    warn!(%peer, ?error, "client data connection failed");
+                }
             }
         });
     }
@@ -116,7 +123,7 @@ async fn handle_ingress(stream: TcpStream, state: AppState) -> anyhow::Result<()
     let claim = broadcast_and_wait_for_claim(&state, &connection_id, hostname.as_deref()).await?;
     let route_label = hostname.as_deref().unwrap_or("<default>");
 
-    info!(%connection_id, hostname = route_label, client_id = %claim.client_id, "accepted tunnel claim");
+    debug!(%connection_id, hostname = route_label, client_id = %claim.client_id, "accepted tunnel claim");
 
     let expires_at = Instant::now() + Duration::from_millis(state.config.pending_timeout_ms);
     {
@@ -172,25 +179,6 @@ async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<Option<String>> {
             }
         }
     }
-}
-
-fn looks_like_http_prefix(buf: &[u8]) -> bool {
-    const PREFIXES: [&[u8]; 10] = [
-        b"GET ",
-        b"POST ",
-        b"HEAD ",
-        b"PUT ",
-        b"PATCH ",
-        b"DELETE ",
-        b"OPTIONS ",
-        b"TRACE ",
-        b"CONNECT ",
-        b"PRI * HTTP/2.0",
-    ];
-
-    PREFIXES
-        .iter()
-        .any(|prefix| prefix.starts_with(buf) || buf.starts_with(prefix))
 }
 
 async fn broadcast_and_wait_for_claim(
@@ -323,13 +311,13 @@ async fn handle_client_data(stream: TcpStream, state: AppState) -> anyhow::Resul
     }
     drop(pending);
 
-    info!(
+    debug!(
         connection_id = %prefix.connection_id,
         client_id = %prefix.client_id,
         "binding claimed tunnel"
     );
 
-    relay_streams(entry.ingress, &mut stream).await
+    relay_streams(entry.ingress, &mut stream, state.config.relay_mode).await
 }
 
 async fn read_prefix(stream: TcpStream) -> anyhow::Result<(PrefixEnvelope, TcpStream)> {
@@ -359,10 +347,15 @@ async fn read_prefix(stream: TcpStream) -> anyhow::Result<(PrefixEnvelope, TcpSt
     Ok((prefix, stream))
 }
 
-async fn relay_streams(mut ingress: TcpStream, data_stream: &mut TcpStream) -> anyhow::Result<()> {
-    let (upstream, downstream) = copy_bidirectional(&mut ingress, data_stream)
-        .await
-        .context("copy_bidirectional failed")?;
+async fn relay_streams(
+    mut ingress: TcpStream,
+    data_stream: &mut TcpStream,
+    relay_mode: shared::config::RelayMode,
+) -> anyhow::Result<()> {
+    let (upstream, downstream) =
+        copy_bidirectional_with_mode(&mut ingress, data_stream, relay_mode)
+            .await
+            .context("copy_bidirectional failed")?;
     debug!(upstream, downstream, "tunnel relay finished");
     Ok(())
 }

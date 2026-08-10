@@ -208,12 +208,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "clap",
  "futures",
  "shared",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -264,9 +262,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.21"
+version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crypto-common"
@@ -1283,12 +1281,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "clap",
  "futures",
  "shared",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -1319,12 +1315,15 @@ dependencies = [
  "anyhow",
  "async-nats",
  "base64",
+ "clap",
  "clienthello",
  "serde",
  "serde_json",
  "tokio",
  "tokio-splice2",
  "toml",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

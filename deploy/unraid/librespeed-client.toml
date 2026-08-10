@@ -1,0 +1,14 @@
+client_id = "lfpconnect-librespeed"
+# Override with LFP_PIPE_NATS_URL from the User Script environment.
+nats_url = "nats://127.0.0.1:4222"
+relay_mode = "auto"
+request_subject = "tunnel.connect.request.librespeed"
+claim_ack_timeout_ms = 1500
+
+[[backend_rules]]
+pattern = "swarm01.lfpconnect.io"
+backend_addr = "127.0.0.1:8000"
+
+[[backend_rules]]
+pattern = "198.23.156.92"
+backend_addr = "127.0.0.1:8000"

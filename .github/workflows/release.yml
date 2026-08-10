@@ -1,0 +1,106 @@
+name: Tagged release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive: tar.gz
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
+
+      - name: Test workspace
+        run: cargo test --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Build release binaries
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Package Unix binaries
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -eu
+          archive="lfp-pipe-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/${archive}"
+          cp "target/${{ matrix.target }}/release/lfp-pipe-server" "dist/${archive}/"
+          cp "target/${{ matrix.target }}/release/lfp-pipe-client" "dist/${archive}/"
+          tar -C dist -czf "dist/${archive}.tar.gz" "${archive}"
+          rm -rf "dist/${archive}"
+
+      - name: Package Windows binaries
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $archive = "lfp-pipe-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force "dist/$archive" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-server.exe" "dist/$archive/"
+          Copy-Item "target/${{ matrix.target }}/release/lfp-pipe-client.exe" "dist/$archive/"
+          Compress-Archive -Path "dist/$archive" -DestinationPath "dist/$archive.zip"
+          Remove-Item -Recurse -Force "dist/$archive"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: sha256sum release/* > release/SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes

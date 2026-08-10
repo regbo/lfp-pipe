@@ -1,0 +1,9 @@
+public_listen = "0.0.0.0:7443"
+data_listen = "0.0.0.0:7001"
+advertised_data_addr = "100.100.100.200:7001"
+# Override with LFP_PIPE_NATS_URL from a protected service environment.
+nats_url = "nats://127.0.0.1:4222"
+relay_mode = "auto"
+request_subject = "tunnel.connect.request"
+claim_timeout_ms = 3000
+pending_timeout_ms = 10000

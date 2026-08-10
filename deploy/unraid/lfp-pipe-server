@@ -1,0 +1,75 @@
+#!/bin/bash
+set -eu
+
+# Override this only when migrating an installation to a nonstandard appdata path.
+APP_DIR="${LFP_PIPE_HOME:-/mnt/user/appdata/lfp-pipe}"
+BIN="$APP_DIR/bin/lfp-pipe-server"
+CONFIG="$APP_DIR/etc/server.toml"
+LOG="$APP_DIR/log/server.log"
+PID_FILE="$APP_DIR/run/server.pid"
+ACTION="${1:-start}"
+
+running_pid() {
+    [ -s "$PID_FILE" ] || return 1
+    pid="$(cat "$PID_FILE")"
+    kill -0 "$pid" 2>/dev/null || return 1
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null)"
+    [ "$exe" = "$BIN" ] || [ "$exe" = "$BIN (deleted)" ] || return 1
+    printf '%s\n' "$pid"
+}
+
+start_server() {
+    install -d -m 0755 "$APP_DIR/log" "$APP_DIR/run"
+    if pid="$(running_pid)"; then
+        echo "lfp-pipe server already running as PID $pid"
+        return
+    fi
+    rm -f "$PID_FILE"
+    [ -x "$BIN" ] || { echo "missing executable: $BIN" >&2; exit 1; }
+    [ -r "$CONFIG" ] || { echo "missing configuration: $CONFIG" >&2; exit 1; }
+
+    nohup "$BIN" --config "$CONFIG" >>"$LOG" 2>&1 </dev/null &
+    pid="$!"
+    printf '%s\n' "$pid" >"$PID_FILE"
+    sleep 1
+    kill -0 "$pid" 2>/dev/null || {
+        echo "lfp-pipe server failed to start; inspect $LOG" >&2
+        rm -f "$PID_FILE"
+        exit 1
+    }
+    echo "lfp-pipe server started as PID $pid"
+}
+
+stop_server() {
+    if ! pid="$(running_pid)"; then
+        echo "lfp-pipe server is not running"
+        rm -f "$PID_FILE"
+        return
+    fi
+    kill "$pid"
+    for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "lfp-pipe server did not stop cleanly" >&2
+        exit 1
+    fi
+    rm -f "$PID_FILE"
+    echo "lfp-pipe server stopped"
+}
+
+case "$ACTION" in
+    start) start_server ;;
+    stop) stop_server ;;
+    restart) stop_server; start_server ;;
+    status)
+        if pid="$(running_pid)"; then
+            echo "lfp-pipe server running as PID $pid"
+        else
+            echo "lfp-pipe server is not running"
+            exit 1
+        fi
+        ;;
+    *) echo "usage: $0 {start|stop|restart|status}" >&2; exit 2 ;;
+esac

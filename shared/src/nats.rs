@@ -1,10 +1,15 @@
+//! NATS connection setup shared by the public server and private client.
+
 use anyhow::{Context, anyhow, ensure};
 use async_nats::{Client, ConnectOptions};
 use url::Url;
 
+/// Connect to NATS while preserving the configured server and credential order.
+///
+/// Discovery is intentionally disabled because callback coordination should not
+/// silently move to an address that is unreachable from one side of the tunnel.
 pub async fn connect_nats(nats_url: &str) -> anyhow::Result<Client> {
-    let parsed = Url::parse(nats_url)
-        .with_context(|| format!("failed to parse NATS URL {nats_url}"))?;
+    let parsed = Url::parse(nats_url).context("failed to parse NATS URL")?;
 
     ensure!(
         matches!(parsed.scheme(), "nats" | "tls"),

@@ -1,44 +1,159 @@
-# regbo-tunnel
+# lfp-pipe
 
-Rust reverse-proxy prototype with:
+`lfp-pipe` publishes TCP services that live behind NAT or a firewall. A public
+server accepts ingress traffic, announces it over NATS, and a matching private
+client creates the reverse data connection to the server. The application bytes
+then flow directly through that paired TCP connection; gRPC is not involved.
 
-- `server`: accepts inbound TCP, routes by TLS SNI when present, falls back to HTTP `Host`, and coordinates claims over NATS
-- `client`: subscribes on NATS, claims matching requests, dials the backend, and connects back to the server
-- `shared`: protocol, config, prefix envelope, hostname helpers, and routing logic
-- `Caddy`: local TLS backend for development, reverse proxying to LibreSpeed running on the client side
+The workspace produces two binaries:
 
-## Flow
+- `lfp-pipe-server` accepts public and reverse data connections.
+- `lfp-pipe-client` claims matching requests and connects to private backends.
 
-1. A TCP client connects to `server`.
-2. `server` tries TLS SNI first, then falls back to the HTTP `Host` header; if neither is present it routes as a default request.
-3. `server` publishes a `ConnectionRequest` on NATS.
-4. Matching clients send `ConnectionClaim`s.
-5. `server` round-robins accepted claims across matching clients for the same route, then the winning client opens a TCP connection back to the server data port.
-6. The client sends a base64-encoded prefix line containing `client_id` and `connection_id`.
-7. The server validates the prefix and binds the socket to the pending ingress connection.
-8. Both sides use `tokio::io::copy_bidirectional` for transparent stream forwarding.
+The `shared` crate owns configuration, protocol types, routing, logging, and the
+relay implementation used by both binaries. See
+[`docs/llm/UTILITIES.md`](docs/llm/UTILITIES.md) for the shared utility catalog.
 
-## Local Dev Stack
+## How a connection works
 
-- `mise run server-dev` starts NATS and the Rust server
-- `mise run client-dev` starts LibreSpeed, Caddy, and the Rust client
-- Caddy listens on `9443` with an internal cert and proxies `wsl.regbodesktop.local` to LibreSpeed on `localhost:8080`
-- LibreSpeed is published as `127.0.0.1:8080` only, to simulate a backend that is private to the client side
-- The server binds its data listener on `0.0.0.0:7001` and publishes `localhost:7001` as the client connect-back address to make mixed PowerShell/WSL local development easier
+1. A public TCP client connects to the server.
+2. The server detects TLS SNI or an HTTP `Host` header when available.
+3. The server publishes a `ConnectionRequest` over NATS.
+4. Eligible clients claim the request; the server selects one round-robin.
+5. The selected client connects to its private backend and opens a reverse TCP
+   connection to the server's advertised data address.
+6. A short prefix binds the reverse connection to the waiting public socket.
+7. Server and client relay bytes bidirectionally until either side closes.
 
-## Example
+NATS is the control plane only. Payload traffic does not pass through NATS.
 
-Run a local NATS server, then:
+> [!WARNING]
+> The reverse data connection currently has no cryptographic authentication.
+> The random connection ID is a binding token, not a durable authentication
+> mechanism. Restrict the data listener to trusted networks until authenticated
+> handshakes are implemented. NATS credentials protect only the control plane.
+
+## Relay performance
+
+On Linux, `relay_mode = "auto"` probes `tokio-splice2` once and uses kernel
+`splice(2)` when it works. It falls back to Tokio's buffered relay with 256 KiB
+per direction. `splice` forces the Linux backend, while `buffered` is portable
+and is always used on Windows and macOS.
+
+The larger buffered fallback reduces syscall and wakeup pressure, but it is not
+a guaranteed throughput improvement: socket autotuning, congestion control,
+latency, CPU, and the public-server hairpin can dominate. Benchmark the public
+path before and after tuning. Expected `BrokenPipe` and connection-reset errors
+during browser speed tests are debug events rather than warning spam.
+
+## Build and run
+
+Rust stable is the only build requirement. [mise](https://mise.jdx.dev/) is
+optional and supplies convenient development tasks.
 
 ```powershell
-$HOME\.cargo\bin\cargo.exe run -p server -- --config .\server.example.toml
-$HOME\.cargo\bin\cargo.exe run -p client -- --config .\client.example.toml
+cargo build --workspace --release
+cargo run -p server -- --config .\server.example.toml
+cargo run -p client -- --config .\client.example.toml
 ```
 
-The example server config listens on `8443` so it can run without root/admin privileges during development.
+Every option appears in the generated help:
 
-For an end-to-end curl test after starting `server-dev` and `client-dev`, run curl from WSL:
-
-```sh
-wsl curl -k --resolve wsl.regbodesktop.local:8443:127.0.0.1 https://wsl.regbodesktop.local:8443/
+```text
+lfp-pipe-server --help
+lfp-pipe-client --help
 ```
+
+For the local LibreSpeed stack, use `mise run server-dev` in one terminal and
+`mise run client-dev` in another. Caddy listens on `9443`, LibreSpeed is bound to
+loopback port `8080`, and the example route is `wsl.regbodesktop.local`.
+
+## Configuration
+
+Configuration is layered predictably:
+
+```text
+CLI flag > environment variable > TOML file > typed default
+```
+
+Both programs accept `--config` / `LFP_PIPE_CONFIG` and `--log-filter` /
+`RUST_LOG`. Server overrides use these environment variables:
+
+| Flag | Environment variable |
+| --- | --- |
+| `--public-listen` | `LFP_PIPE_PUBLIC_LISTEN` |
+| `--data-listen` | `LFP_PIPE_DATA_LISTEN` |
+| `--advertised-data-addr` | `LFP_PIPE_ADVERTISED_DATA_ADDR` |
+| `--nats-url` | `LFP_PIPE_NATS_URL` |
+| `--relay-mode` | `LFP_PIPE_RELAY_MODE` |
+| `--request-subject` | `LFP_PIPE_REQUEST_SUBJECT` |
+| `--claim-timeout-ms` | `LFP_PIPE_CLAIM_TIMEOUT_MS` |
+| `--pending-timeout-ms` | `LFP_PIPE_PENDING_TIMEOUT_MS` |
+
+Client-specific overrides are:
+
+| Flag | Environment variable |
+| --- | --- |
+| `--client-id` | `LFP_PIPE_CLIENT_ID` |
+| `--nats-url` | `LFP_PIPE_NATS_URL` |
+| `--relay-mode` | `LFP_PIPE_RELAY_MODE` |
+| `--request-subject` | `LFP_PIPE_REQUEST_SUBJECT` |
+| `--claim-ack-timeout-ms` | `LFP_PIPE_CLAIM_ACK_TIMEOUT_MS` |
+
+Backend rules are structured and therefore remain TOML-only. Start from
+[`server.example.toml`](server.example.toml) and
+[`client.example.toml`](client.example.toml). Do not put real NATS credentials
+in tracked files; inject them at runtime or reference a protected deployment
+configuration.
+
+## Logging
+
+The default filter is `info,async_nats=warn`: startup and operational state are
+visible, while per-connection events stay quiet. Enable targeted diagnostics
+without recompiling:
+
+```powershell
+lfp-pipe-client --config client.toml --log-filter "info,client=debug,shared=debug"
+$env:RUST_LOG = "info,server=debug,shared=trace"
+```
+
+Logging uses `tracing`, so disabled debug callsites are filtered before events
+are formatted. The one debug path that constructs a route-pattern list is also
+guarded explicitly, avoiding that allocation when debug logging is disabled.
+NATS URL parse errors deliberately omit the URL to avoid leaking credentials.
+
+## Tests
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
+
+Linux-specific splice behavior should also be tested on Linux (WSL is fine).
+The relay tests cover explicit buffered/splice modes, large asymmetric payloads,
+half-closes, and fallback behavior.
+
+## Releases
+
+Pushing a semantic version tag such as `v1.2.3` runs the tagged-release matrix
+for Linux x86-64/ARM64, Windows x86-64/ARM64, and macOS Intel/Apple Silicon.
+Each platform is tested natively, packaged with both binaries, checksummed, and
+attached to a GitHub release.
+
+Create the next tag from a clean worktree with:
+
+```text
+mise run version:bump patch
+mise run version:bump minor --push
+mise run version:bump major
+```
+
+## Deployment
+
+- [`deploy/swarm01/README.md`](deploy/swarm01/README.md) documents the public
+  native systemd server.
+- [`deploy/unraid/README.md`](deploy/unraid/README.md) documents the native
+  LFPConnect client/server supervisors and LibreSpeed backend.
+
+Current LibreSpeed public endpoint: `http://swarm01.lfpconnect.io:7443/`.

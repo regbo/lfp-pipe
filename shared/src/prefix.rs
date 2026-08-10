@@ -1,17 +1,25 @@
+//! Versioned callback prefix used to pair a socket with pending ingress.
+
 use anyhow::{Context, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
+/// First line sent by a client on a callback/data connection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrefixEnvelope {
+    /// Wire-format version.
     pub version: u16,
+    /// Client that won the server's claim selection.
     pub client_id: String,
+    /// Public ingress connection to which this callback belongs.
     pub connection_id: String,
 }
 
 impl PrefixEnvelope {
+    /// Wire version emitted and accepted by this build.
     pub const CURRENT_VERSION: u16 = 1;
 
+    /// Construct a prefix for a claimed connection.
     pub fn new(client_id: impl Into<String>, connection_id: impl Into<String>) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
@@ -20,6 +28,7 @@ impl PrefixEnvelope {
         }
     }
 
+    /// Serialize the envelope as base64-encoded JSON terminated by a newline.
     pub fn encode_line(&self) -> anyhow::Result<Vec<u8>> {
         let json = serde_json::to_vec(self).context("failed to serialize prefix envelope")?;
         let mut encoded = STANDARD.encode(json).into_bytes();
@@ -27,6 +36,7 @@ impl PrefixEnvelope {
         Ok(encoded)
     }
 
+    /// Decode and validate one newline-terminated prefix.
     pub fn decode_line(line: &[u8]) -> anyhow::Result<Self> {
         let line = std::str::from_utf8(line).context("prefix must be valid utf-8")?;
         let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
