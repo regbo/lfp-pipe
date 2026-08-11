@@ -9,8 +9,10 @@ the server or client crates.
 | `ServerConfig`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define concrete typed component configuration, defaults, and routing data. | CLI, server, client |
 | `ClientConfigDefaults`, `ClientRouteConfig`, `load_client_configs` | `shared/src/config.rs` | Inherit shared settings into independently authenticated hostname sessions while retaining the legacy single-route format. | Multi-route tunnel client |
 | `ClientOAuthConfig` | `shared/src/config.rs` | Configure Authentik machine credentials and automatic route-ticket renewal without storing NATS tickets. | Tunnel client |
+| `ClientAcmeConfig`, `ClientAcmeDefaults` | `shared/src/config.rs` | Configure inheritable TLS-ALPN-01 certificate acquisition, persistent key caching, and local TLS termination. | Tunnel client |
 | `extract_http_host`, `looks_like_http_prefix` | `shared/src/http.rs` | Detect supported HTTP prefixes and extract a normalized Host header. | Public server routing |
 | `copy_bidirectional_with_mode` | `shared/src/io.rs` | Select splice or bounded buffered bidirectional TCP forwarding. | Server and client relays |
+| `copy_bidirectional_buffered` | `shared/src/io.rs` | Forward arbitrary Tokio streams such as locally terminated TLS with the standard bounded buffers. | ACME TLS relay |
 | `init`, `is_expected_disconnect` | `shared/src/logging.rs` | Initialize low-noise tracing and classify normal peer teardown. | Binary entry points and relay loops |
 | `connect_nats` | `shared/src/nats.rs` | Establish a deterministic NATS control-plane connection. | Server and client startup |
 | `connect_nats_with_token` | `shared/src/nats.rs` | Establish NATS connections from short-lived in-memory OAuth exchanges. | OAuth tunnel client |

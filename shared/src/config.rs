@@ -24,6 +24,11 @@
 //! client_secret_file = "/run/secrets/client-secret"
 //! control_plane_url = "https://manage-pipe.example.com"
 //!
+//! [defaults.acme]
+//! contacts = ["mailto:admin@example.com"]
+//! cache_dir = "/var/lib/lfp-pipe/acme"
+//! production = false
+//!
 //! [[routes]]
 //! client_id = "site-a"
 //! hostname = "site-a.pipe.example.com"
@@ -166,6 +171,9 @@ pub struct ClientConfig {
     /// Optional Authentik exchange used to obtain and renew route-scoped NATS tickets.
     #[serde(default)]
     pub oauth: Option<ClientOAuthConfig>,
+    /// Optional automatic certificate acquisition and local TLS termination.
+    #[serde(default)]
+    pub acme: Option<ClientAcmeConfig>,
     /// Stream-copy implementation used between callback and backend sockets.
     #[serde(default)]
     pub relay_mode: RelayMode,
@@ -202,6 +210,28 @@ pub struct ClientOAuthConfig {
     pub renew_before_seconds: u64,
 }
 
+/// Automatic certificate settings for one concrete client route.
+///
+/// The client uses TLS-ALPN-01 over the existing tunnel, so enabling this does
+/// not bind or expose another local port. Certificates and account keys are
+/// persisted below [`Self::cache_dir`] and reused across restarts and renewals.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientAcmeConfig {
+    /// Exact DNS name placed on the certificate and validated by the CA.
+    pub domain: String,
+    /// ACME account contacts, normally `mailto:user@example.com` values.
+    #[serde(default)]
+    pub contacts: Vec<String>,
+    /// Persistent directory containing ACME account keys and certificates.
+    pub cache_dir: String,
+    /// Use Let's Encrypt production instead of its rate-limit-safe staging CA.
+    #[serde(default)]
+    pub production: bool,
+    /// Optional custom ACME directory URL, taking precedence over `production`.
+    #[serde(default)]
+    pub directory_url: Option<String>,
+}
+
 /// Optional client values supplied by Clap after CLI/environment resolution.
 #[derive(Debug, Clone, Default)]
 pub struct ClientOverrides {
@@ -235,6 +265,9 @@ pub struct ClientConfigDefaults {
     /// Default Authentik exchange settings shared by route sessions.
     #[serde(default)]
     pub oauth: Option<ClientOAuthDefaults>,
+    /// Default automatic certificate settings shared by route sessions.
+    #[serde(default)]
+    pub acme: Option<ClientAcmeDefaults>,
     /// Default stream-copy implementation.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -282,6 +315,30 @@ pub struct ClientOAuthDefaults {
     pub renew_before_seconds: Option<u64>,
 }
 
+/// Inheritable automatic certificate settings for multi-route client files.
+///
+/// The certificate domain is intentionally absent: every expanded route uses
+/// its own exact `hostname`, preventing a shared default from accidentally
+/// requesting a certificate for the wrong route.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ClientAcmeDefaults {
+    /// Whether this route should inherit or enable automatic TLS termination.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// ACME account contacts, normally `mailto:user@example.com` values.
+    #[serde(default)]
+    pub contacts: Option<Vec<String>>,
+    /// Persistent directory containing ACME account keys and certificates.
+    #[serde(default)]
+    pub cache_dir: Option<String>,
+    /// Use Let's Encrypt production instead of its staging CA.
+    #[serde(default)]
+    pub production: Option<bool>,
+    /// Optional custom ACME directory URL for private CAs or Pebble tests.
+    #[serde(default)]
+    pub directory_url: Option<String>,
+}
+
 /// One independently authenticated hostname in a multi-route client file.
 ///
 /// Each entry expands into a normal [`ClientConfig`] with exactly one
@@ -305,6 +362,9 @@ pub struct ClientRouteConfig {
     /// Route-specific Authentik settings layered over shared OAuth defaults.
     #[serde(default)]
     pub oauth: Option<ClientOAuthDefaults>,
+    /// Route-specific ACME settings layered over shared ACME defaults.
+    #[serde(default)]
+    pub acme: Option<ClientAcmeDefaults>,
     /// Route-specific stream-copy implementation override.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -523,6 +583,7 @@ fn expand_client_route(
         route.oauth.as_ref(),
         &route.hostname,
     )?;
+    let acme = merge_acme_defaults(defaults.acme.as_ref(), route.acme.as_ref(), &route.hostname)?;
 
     Ok(ClientConfig {
         client_id: route.client_id,
@@ -531,6 +592,7 @@ fn expand_client_route(
             .nats_token_file
             .or_else(|| defaults.nats_token_file.clone()),
         oauth,
+        acme,
         relay_mode: route.relay_mode.or(defaults.relay_mode).unwrap_or_default(),
         request_subject: route
             .request_subject
@@ -548,6 +610,48 @@ fn expand_client_route(
                 .or_else(|| defaults.http_backend_addr.clone()),
         }],
     })
+}
+
+fn merge_acme_defaults(
+    defaults: Option<&ClientAcmeDefaults>,
+    route: Option<&ClientAcmeDefaults>,
+    hostname: &str,
+) -> anyhow::Result<Option<ClientAcmeConfig>> {
+    if defaults.is_none() && route.is_none() {
+        return Ok(None);
+    }
+    let enabled = route
+        .and_then(|settings| settings.enabled)
+        .or_else(|| defaults.and_then(|settings| settings.enabled))
+        .unwrap_or(true);
+    if !enabled {
+        return Ok(None);
+    }
+
+    let cache_dir = route
+        .and_then(|settings| settings.cache_dir.clone())
+        .or_else(|| defaults.and_then(|settings| settings.cache_dir.clone()))
+        .context("acme.cache_dir is required in the route or [defaults.acme]")?;
+    anyhow::ensure!(
+        !cache_dir.trim().is_empty(),
+        "acme.cache_dir cannot be empty"
+    );
+
+    Ok(Some(ClientAcmeConfig {
+        domain: hostname.to_string(),
+        contacts: route
+            .and_then(|settings| settings.contacts.clone())
+            .or_else(|| defaults.and_then(|settings| settings.contacts.clone()))
+            .unwrap_or_default(),
+        cache_dir,
+        production: route
+            .and_then(|settings| settings.production)
+            .or_else(|| defaults.and_then(|settings| settings.production))
+            .unwrap_or(false),
+        directory_url: route
+            .and_then(|settings| settings.directory_url.clone())
+            .or_else(|| defaults.and_then(|settings| settings.directory_url.clone())),
+    }))
 }
 
 fn merge_oauth_defaults(
@@ -699,6 +803,10 @@ mod tests {
                 client_secret_file = "/run/secrets/client-secret"
                 control_plane_url = "https://manage-pipe.example.com"
 
+                [defaults.acme]
+                contacts = ["mailto:admin@example.com"]
+                cache_dir = "/var/lib/lfp-pipe/acme"
+
                 [[routes]]
                 client_id = "alpha"
                 hostname = "alpha.pipe.example.com"
@@ -707,6 +815,9 @@ mod tests {
                 client_id = "beta"
                 hostname = "beta.pipe.example.com"
                 backend_addr = ":8443"
+
+                [routes.acme]
+                enabled = false
             "#,
         )
         .expect("multi-route config");
@@ -737,6 +848,11 @@ mod tests {
             configs[1].oauth.as_ref().expect("OAuth").username,
             "lfp-pipe-team"
         );
+        let first_acme = configs[0].acme.as_ref().expect("ACME");
+        assert_eq!(first_acme.domain, "alpha.pipe.example.com");
+        assert_eq!(first_acme.cache_dir, "/var/lib/lfp-pipe/acme");
+        assert!(!first_acme.production);
+        assert_eq!(configs[1].acme, None);
     }
 
     #[test]
@@ -800,5 +916,32 @@ mod tests {
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].client_id, "desktop-web");
         assert_eq!(configs[1].client_id, "desktop-admin");
+        assert!(!configs[0].acme.as_ref().expect("first ACME").production);
+        assert!(configs[1].acme.as_ref().expect("second ACME").production);
+    }
+
+    #[test]
+    fn legacy_client_can_opt_into_automatic_certificates() {
+        let configs = parse_client_configs(
+            r#"
+                client_id = "legacy"
+                nats_url = "nats://localhost:4222"
+
+                [acme]
+                domain = "legacy.example.com"
+                contacts = ["mailto:admin@example.com"]
+                cache_dir = "/var/lib/lfp-pipe/acme"
+
+                [[backend_rules]]
+                pattern = "legacy.example.com"
+                backend_addr = ":8080"
+            "#,
+        )
+        .expect("legacy ACME client");
+
+        let acme = configs[0].acme.as_ref().expect("ACME");
+        assert_eq!(acme.domain, "legacy.example.com");
+        assert!(!acme.production);
+        assert_eq!(acme.directory_url, None);
     }
 }

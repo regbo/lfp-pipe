@@ -17,6 +17,13 @@ client_secret_file = "/run/secrets/lfp_pipe_client_secret"
 control_plane_url = "https://manage-pipe.example.com"
 renew_before_seconds = 60
 
+# Automatic TLS is opt-in and uses Let's Encrypt staging unless production is
+# explicitly true. Each hostname receives its own directory below cache_dir.
+[defaults.acme]
+contacts = ["mailto:admin@example.com"]
+cache_dir = "/var/lib/lfp-pipe/acme"
+production = false
+
 [[routes]]
 client_id = "desktop-web"
 hostname = "web.pipe.example.com"
@@ -30,3 +37,6 @@ backend_addr = "127.0.0.1:8443"
 [routes.oauth]
 username = "lfp-pipe-admin-ef56ab78"
 client_secret_file = "/run/secrets/lfp_pipe_admin_secret"
+
+[routes.acme]
+production = true

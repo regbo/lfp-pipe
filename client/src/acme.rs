@@ -1,0 +1,185 @@
+//! Automatic certificate acquisition and local TLS termination for a route.
+//!
+//! `rustls-acme` drives TLS-ALPN-01 over sockets that already traversed the
+//! public tunnel. No listener is opened on the client machine. Successful
+//! handshakes yield decrypted streams which are copied to the route's normal
+//! backend address.
+
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, anyhow};
+use futures::StreamExt;
+use rustls_acme::{AcmeConfig, caches::DirCache};
+use shared::{
+    config::{BackendRule, ClientAcmeConfig, RelayMode},
+    io::copy_bidirectional_buffered,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+    sync::mpsc,
+};
+use tokio_stream::wrappers::ReceiverStream;
+use tracing::{debug, info, warn};
+
+/// Cloneable ingress handle owned by request-processing tasks.
+#[derive(Clone)]
+pub(crate) struct AcmeRuntime {
+    sender: mpsc::Sender<TcpStream>,
+}
+
+impl AcmeRuntime {
+    /// Start certificate management for one exact hostname and backend.
+    pub(crate) fn start(
+        config: ClientAcmeConfig,
+        backend: BackendRule,
+        relay_mode: RelayMode,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !matches!(relay_mode, RelayMode::Splice),
+            "automatic TLS termination cannot use splice relay mode; use auto or buffered"
+        );
+        let cache_dir = domain_cache_dir(Path::new(&config.cache_dir), &config.domain);
+        prepare_cache_dir(&cache_dir)?;
+        let (sender, receiver) = mpsc::channel(64);
+        tokio::spawn(async move {
+            if let Err(error) = run_acme(config, cache_dir, backend, receiver).await {
+                warn!(?error, "ACME TLS runtime stopped");
+            }
+        });
+        Ok(Self { sender })
+    }
+
+    /// Submit one tunneled TLS connection to the ACME-aware acceptor.
+    pub(crate) async fn accept(&self, stream: TcpStream) -> anyhow::Result<()> {
+        self.sender
+            .send(stream)
+            .await
+            .map_err(|_| anyhow!("ACME TLS runtime is not available"))
+    }
+}
+
+async fn run_acme(
+    config: ClientAcmeConfig,
+    cache_dir: PathBuf,
+    backend: BackendRule,
+    receiver: mpsc::Receiver<TcpStream>,
+) -> anyhow::Result<()> {
+    let mut acme = AcmeConfig::new([&config.domain]).contact(config.contacts.iter());
+    acme = if let Some(directory_url) = config.directory_url.as_deref() {
+        acme.directory(directory_url)
+    } else {
+        acme.directory_lets_encrypt(config.production)
+    };
+    let tcp_incoming = ReceiverStream::new(receiver).map(Ok::<_, io::Error>);
+    // Advertising only HTTP/1.1 avoids handing HTTP/2 frames to ordinary
+    // plaintext backends that do not implement h2c.
+    let mut tls_incoming = acme
+        .cache(DirCache::new(cache_dir))
+        .tokio_incoming(tcp_incoming, vec![b"http/1.1".to_vec()]);
+
+    info!(
+        domain = %config.domain,
+        production = config.production,
+        "automatic certificate runtime started"
+    );
+    while let Some(connection) = tls_incoming.next().await {
+        match connection {
+            Ok(tls_stream) => {
+                let backend_addr = backend.resolved_backend_addr();
+                tokio::spawn(async move {
+                    if let Err(error) = bridge_tls(tls_stream, &backend_addr).await {
+                        warn!(?error, backend = %backend_addr, "ACME TLS relay failed");
+                    }
+                });
+            }
+            Err(error) => warn!(?error, domain = %config.domain, "ACME TLS accept failed"),
+        }
+    }
+    debug!(domain = %config.domain, "ACME TLS ingress channel closed");
+    Ok(())
+}
+
+async fn bridge_tls<T>(mut tls_stream: T, backend_addr: &str) -> anyhow::Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut backend_stream = TcpStream::connect(backend_addr)
+        .await
+        .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+    let (to_client, to_backend) = copy_bidirectional_buffered(&mut tls_stream, &mut backend_stream)
+        .await
+        .context("ACME TLS copy_bidirectional failed")?;
+    debug!(to_client, to_backend, "ACME TLS relay finished");
+    Ok(())
+}
+
+fn prepare_cache_dir(path: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create ACME cache directory {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
+            format!(
+                "failed to secure ACME cache directory permissions {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn domain_cache_dir(root: &Path, domain: &str) -> PathBuf {
+    // Never treat a configured hostname as a path. The per-domain directory
+    // also prevents concurrent route sessions from racing over cache files.
+    let component: String = domain
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    root.join(component)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AcmeRuntime, domain_cache_dir};
+    use shared::config::{BackendRule, ClientAcmeConfig, RelayMode};
+    use std::path::Path;
+
+    #[test]
+    fn domain_cache_directory_cannot_escape_root() {
+        let path = domain_cache_dir(Path::new("cache"), "../../bad/domain");
+        assert_eq!(path, Path::new("cache").join(".._.._bad_domain"));
+    }
+
+    #[test]
+    fn automatic_tls_rejects_splice_before_touching_cache() {
+        let error = AcmeRuntime::start(
+            ClientAcmeConfig {
+                domain: "example.com".to_string(),
+                contacts: Vec::new(),
+                cache_dir: "unused".to_string(),
+                production: false,
+                directory_url: None,
+            },
+            BackendRule {
+                pattern: "example.com".to_string(),
+                backend_addr: ":8080".to_string(),
+                http_backend_addr: None,
+            },
+            RelayMode::Splice,
+        )
+        .err()
+        .expect("splice must fail");
+        assert!(error.to_string().contains("cannot use splice"));
+    }
+}

@@ -5,7 +5,10 @@
 
 use crate::config::RelayMode;
 use anyhow::Context;
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+};
 
 #[cfg(target_os = "linux")]
 use {
@@ -169,13 +172,29 @@ async fn probe_splice_relay() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Copy both directions between arbitrary Tokio streams with bounded buffers.
+///
+/// TLS streams cannot use Linux `splice(2)` because encryption is processed in
+/// userspace. This generic path keeps the same buffer sizing and diagnostics as
+/// the TCP-only fallback used by the regular tunnel relay.
+pub async fn copy_bidirectional_buffered<L, R>(
+    left: &mut L,
+    right: &mut R,
+) -> anyhow::Result<(u64, u64)>
+where
+    L: AsyncRead + AsyncWrite + Unpin,
+    R: AsyncRead + AsyncWrite + Unpin,
+{
+    tokio::io::copy_bidirectional_with_sizes(left, right, BUFFERED_RELAY_SIZE, BUFFERED_RELAY_SIZE)
+        .await
+        .context("tokio copy_bidirectional failed")
+}
+
 async fn buffered_copy_bidirectional(
     left: &mut TcpStream,
     right: &mut TcpStream,
 ) -> anyhow::Result<(u64, u64)> {
-    tokio::io::copy_bidirectional_with_sizes(left, right, BUFFERED_RELAY_SIZE, BUFFERED_RELAY_SIZE)
-        .await
-        .context("tokio copy_bidirectional failed")
+    copy_bidirectional_buffered(left, right).await
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -2,6 +2,7 @@
 
 #![warn(missing_docs)]
 
+mod acme;
 mod oauth;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +32,7 @@ use tracing::{Level, debug, enabled, info, warn};
 struct AppState {
     config: ClientConfig,
     nats: Client,
+    acme: Option<acme::AcmeRuntime>,
 }
 
 /// Subscribe for matching requests and bridge accepted tunnels to backends.
@@ -163,7 +165,26 @@ async fn process_messages(
         .await
         .context("failed to subscribe to request subject")?;
 
-    let state = AppState { config, nats };
+    let acme = if let Some(acme_config) = config.acme.clone() {
+        anyhow::ensure!(
+            config.backend_rules.len() == 1,
+            "automatic certificates require exactly one backend rule per client route"
+        );
+        let backend = config.backend_rules[0].clone();
+        anyhow::ensure!(
+            backend.pattern.eq_ignore_ascii_case(&acme_config.domain),
+            "automatic certificate domain must exactly match its backend pattern"
+        );
+        Some(acme::AcmeRuntime::start(
+            acme_config,
+            backend,
+            config.relay_mode,
+        )?)
+    } else {
+        None
+    };
+
+    let state = AppState { config, nats, acme };
     info!(
         client_id = %state.config.client_id,
         request_subject = %request_subject,
@@ -246,6 +267,7 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
         &request,
         &backend,
         state.config.relay_mode,
+        state.acme.as_ref(),
     )
     .await
 }
@@ -305,6 +327,7 @@ async fn bridge_connection(
     request: &ConnectionRequest,
     backend: &BackendRule,
     relay_mode: RelayMode,
+    acme: Option<&acme::AcmeRuntime>,
 ) -> anyhow::Result<()> {
     let mut server_stream = TcpStream::connect(&request.server_data_addr)
         .await
@@ -316,7 +339,18 @@ async fn bridge_connection(
         .await
         .context("failed to write prefix envelope")?;
 
-    let (backend_addr, plaintext_http) = select_protocol_backend(backend, &server_stream).await?;
+    let (backend_addr, plaintext_http) =
+        select_protocol_backend(backend, &server_stream, acme.is_some()).await?;
+    if let Some(acme) = acme
+        && !plaintext_http
+    {
+        debug!(
+            connection_id = %request.connection_id,
+            client_id,
+            "handing tunneled TLS to automatic certificate runtime"
+        );
+        return acme.accept(server_stream).await;
+    }
     debug!(
         connection_id = %request.connection_id,
         client_id,
@@ -339,8 +373,9 @@ async fn bridge_connection(
 async fn select_protocol_backend(
     backend: &BackendRule,
     server_stream: &TcpStream,
+    inspect_http: bool,
 ) -> anyhow::Result<(String, bool)> {
-    if backend.http_backend_addr.is_none() {
+    if backend.http_backend_addr.is_none() && !inspect_http {
         return Ok((backend.resolved_backend_addr(), false));
     }
 
@@ -393,7 +428,7 @@ mod tests {
             http_backend_addr: Some("127.0.0.1:80".to_string()),
         };
         assert_eq!(
-            select_protocol_backend(&split, &server_stream).await?,
+            select_protocol_backend(&split, &server_stream, false).await?,
             ("127.0.0.1:80".to_string(), true)
         );
 
@@ -402,8 +437,12 @@ mod tests {
             ..split
         };
         assert_eq!(
-            select_protocol_backend(&unsplit, &server_stream).await?,
+            select_protocol_backend(&unsplit, &server_stream, false).await?,
             ("127.0.0.1:443".to_string(), false)
+        );
+        assert_eq!(
+            select_protocol_backend(&unsplit, &server_stream, true).await?,
+            ("127.0.0.1:443".to_string(), true)
         );
         Ok(())
     }

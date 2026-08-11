@@ -125,6 +125,40 @@ route fails, the process exits so a service supervisor can restart the whole
 declared set instead of silently leaving only some hostnames available. The
 original flat single-route format remains supported without changes.
 
+### Automatic certificates
+
+Routes can terminate TLS inside `lfp-pipe-client` without Caddy or another
+local listener. Add `[acme]` to a legacy file, or `[defaults.acme]` with an
+optional `[routes.acme]` override in a multi-route file. The client uses
+TLS-ALPN-01 over the existing public tunnel, stores the ACME account and
+certificate below `cache_dir/<hostname>`, and forwards decrypted bytes to
+`backend_addr`. No additional client port is opened.
+
+```toml
+[defaults]
+backend_addr = "127.0.0.1:8080"
+http_backend_addr = "127.0.0.1:8080"
+
+[defaults.acme]
+contacts = ["mailto:admin@example.com"]
+cache_dir = "/var/lib/lfp-pipe/acme"
+production = false
+```
+
+Staging is the default to protect production CA rate limits. Set
+`production = true` only after the route works end to end, or set
+`directory_url` for another ACME-compatible CA. Treat `cache_dir` as secret
+material because it contains account and certificate private keys. On Unix the
+client creates each hostname directory with mode `0700`.
+
+Set `enabled = false` in `[routes.acme]` when a route should opt out of an
+inherited `[defaults.acme]` block.
+
+When ACME is enabled, TLS is terminated and sent to `backend_addr` as plaintext.
+Plain HTTP is detected and sent to `http_backend_addr`; if that setting is
+omitted it falls back to `backend_addr`. Automatic TLS uses the buffered relay,
+so explicit `relay_mode = "splice"` is rejected while `auto` and `buffered` work.
+
 Routes that terminate TLS locally can send plaintext HTTP to a separate
 listener without another tunnel. Set `backend_addr` to the TLS/default socket
 and `http_backend_addr` to Caddy's HTTP socket. The client peeks at the first
