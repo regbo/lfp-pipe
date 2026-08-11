@@ -441,6 +441,42 @@ pub(crate) fn strip_request_path_prefix(bytes: Vec<u8>, prefix: &str) -> anyhow:
     Ok(output)
 }
 
+pub(crate) fn set_host_header(bytes: Vec<u8>, host: &str) -> anyhow::Result<Vec<u8>> {
+    ensure!(
+        !host.is_empty() && !host.contains(['\r', '\n']),
+        "backend_host must be a non-empty HTTP Host value"
+    );
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| anyhow!("incomplete HTTP request headers"))?;
+    let mut output = Vec::with_capacity(bytes.len() + host.len());
+    let mut host_count = 0;
+    for (index, line) in bytes[..header_end].split(|byte| *byte == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let is_host = index > 0
+            && line
+                .splitn(2, |byte| *byte == b':')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"host"));
+        if is_host {
+            host_count += 1;
+            output.extend_from_slice(b"Host: ");
+            output.extend_from_slice(host.as_bytes());
+        } else {
+            output.extend_from_slice(line);
+        }
+        output.extend_from_slice(b"\r\n");
+    }
+    ensure!(
+        host_count == 1,
+        "HTTP request must contain exactly one Host header"
+    );
+    output.extend_from_slice(b"\r\n");
+    output.extend_from_slice(&bytes[header_end + 4..]);
+    Ok(output)
+}
+
 fn bearer_token(bytes: &[u8]) -> anyhow::Result<&str> {
     let mut headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
@@ -551,7 +587,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        bearer_token, claim_strings, request_path, strip_authorization_header,
+        bearer_token, claim_strings, request_path, set_host_header, strip_authorization_header,
         strip_request_path_prefix,
     };
     use serde_json::json;
@@ -567,6 +603,18 @@ mod tests {
         let claims = json!({"realm_access": {"roles": ["ollama-user", "admin"]}});
         let roles = claim_strings(&claims, "realm_access.roles").expect("roles");
         assert!(roles.contains("ollama-user"));
+    }
+
+    #[test]
+    fn rewrites_host_header_and_preserves_body() {
+        let request =
+            b"POST /api/generate HTTP/1.1\r\nhost: public.example\r\nContent-Length: 2\r\n\r\n{}"
+                .to_vec();
+        let rewritten = set_host_header(request, "127.0.0.1:11434").expect("host rewrite");
+        assert_eq!(
+            rewritten,
+            b"POST /api/generate HTTP/1.1\r\nHost: 127.0.0.1:11434\r\nContent-Length: 2\r\n\r\n{}"
+        );
     }
 
     #[test]

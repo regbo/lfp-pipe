@@ -345,6 +345,9 @@ pub struct ClientConfigDefaults {
     /// Default private destination for TLS or raw TCP traffic.
     #[serde(default)]
     pub backend_addr: Option<String>,
+    /// Default HTTP Host value presented to a selected backend.
+    #[serde(default)]
+    pub backend_host: Option<String>,
     /// Default private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
@@ -496,6 +499,9 @@ pub struct ClientRouteConfig {
     /// Route-specific private destination for TLS or raw TCP traffic.
     #[serde(default)]
     pub backend_addr: Option<String>,
+    /// Route-specific HTTP Host value presented to the backend.
+    #[serde(default)]
+    pub backend_host: Option<String>,
     /// Route-specific private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
@@ -511,6 +517,9 @@ pub struct ClientPathRouteConfig {
     pub path_prefix: String,
     /// Private destination for requests under this prefix.
     pub backend_addr: String,
+    /// HTTP Host value presented to this backend instead of the public host.
+    #[serde(default)]
+    pub backend_host: Option<String>,
     /// Remove the prefix before forwarding to the backend.
     #[serde(default)]
     pub strip_path_prefix: bool,
@@ -572,6 +581,9 @@ pub struct BackendRule {
     pub strip_path_prefix: bool,
     /// Socket address dialed by the client when this rule matches.
     pub backend_addr: String,
+    /// Optional HTTP Host value substituted before forwarding.
+    #[serde(default)]
+    pub backend_host: Option<String>,
     /// Optional destination for plaintext HTTP, including ACME HTTP-01 requests.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
@@ -845,6 +857,7 @@ fn expand_client_route(
         path_prefix: None,
         strip_path_prefix: false,
         backend_addr,
+        backend_host: route.backend_host.or_else(|| defaults.backend_host.clone()),
         http_backend_addr: route
             .http_backend_addr
             .or_else(|| defaults.http_backend_addr.clone()),
@@ -863,6 +876,7 @@ fn expand_client_route(
             path_prefix: Some(path_route.path_prefix),
             strip_path_prefix: path_route.strip_path_prefix,
             backend_addr: path_route.backend_addr,
+            backend_host: path_route.backend_host,
             http_backend_addr: None,
             authorization: path_authorization,
         });
@@ -1281,6 +1295,7 @@ mod tests {
         let ollama = &config.backend_rules[1];
         let authorization = ollama.authorization.as_ref().expect("authorization");
         assert_eq!(ollama.resolved_backend_addr(), "127.0.0.1:11434");
+        assert_eq!(ollama.backend_host.as_deref(), Some("127.0.0.1:11434"));
         assert_eq!(ollama.path_prefix.as_deref(), Some("/ollama"));
         assert!(ollama.strip_path_prefix);
         assert_eq!(authorization.audiences, ["ollama"]);

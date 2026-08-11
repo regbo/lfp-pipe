@@ -139,6 +139,9 @@ where
                 .context("missing path_prefix")?,
         )?;
     }
+    if let Some(host) = backend.rule.backend_host.as_deref() {
+        request = authorization::set_host_header(request, host)?;
+    }
     let backend_addr = backend.rule.resolved_backend_addr();
     let mut backend_stream = TcpStream::connect(&backend_addr)
         .await
@@ -215,6 +218,7 @@ mod tests {
                     path_prefix: None,
                     strip_path_prefix: false,
                     backend_addr: ":8080".to_string(),
+                    backend_host: None,
                     http_backend_addr: None,
                     authorization: None,
                 },

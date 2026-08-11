@@ -28,6 +28,7 @@ hostname = "services.pipe.example.com"
 path_prefix = "/ollama"
 strip_path_prefix = true
 backend_addr = "127.0.0.1:11434"
+backend_host = "127.0.0.1:11434"
 
 # OAuth access tokens presented by callers are validated as JWTs. Issuer and
 # audience comparisons are exact; they are deliberately not wildcard patterns.

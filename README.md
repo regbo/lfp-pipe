@@ -147,6 +147,8 @@ TLS path from bypassing HTTP routing or JWT inspection. Add one or more
 backend under the same certificate. `strip_path_prefix = true` turns a public
 request such as `/ollama/api/tags` into `/api/tags` for Ollama. The most-specific
 matching prefix wins and the hostname's ordinary `backend_addr` is the fallback.
+Set `backend_host` when the private service validates the HTTP `Host` header;
+for example, Ollama commonly needs `backend_host = "127.0.0.1:11434"`.
 
 Only HTTP/1.1 is advertised on the locally terminated TLS connection. A path
 route can have its own `[routes.path_routes.authorization]` policy, leaving the

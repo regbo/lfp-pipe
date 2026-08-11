@@ -479,6 +479,9 @@ async fn bridge_connection(
                     .context("missing path_prefix")?,
             )?;
         }
+        if let Some(host) = selected.rule.backend_host.as_deref() {
+            request_bytes = authorization::set_host_header(request_bytes, host)?;
+        }
         (selected, Some(request_bytes))
     } else {
         (fallback, None)
@@ -546,6 +549,7 @@ mod tests {
             path_prefix: None,
             strip_path_prefix: false,
             backend_addr: "127.0.0.1:443".to_string(),
+            backend_host: None,
             http_backend_addr: Some("127.0.0.1:80".to_string()),
             authorization: None,
         }];
