@@ -39,7 +39,7 @@ func Load() (Config, error) {
 		HTTPAddr:                 envOr("LFP_AUTH_HTTP_ADDR", ":8080"),
 		PublicURL:                strings.TrimRight(os.Getenv("LFP_AUTH_PUBLIC_URL"), "/"),
 		AllowedRouteSuffix:       os.Getenv("LFP_AUTH_ROUTE_SUFFIX"),
-		OIDCIssuerURL:            strings.TrimRight(os.Getenv("LFP_AUTH_OIDC_ISSUER_URL"), "/"),
+		OIDCIssuerURL:            os.Getenv("LFP_AUTH_OIDC_ISSUER_URL"),
 		OIDCClientID:             os.Getenv("LFP_AUTH_OIDC_CLIENT_ID"),
 		OIDCScopes:               splitCSV(envOr("LFP_AUTH_OIDC_SCOPES", "openid,profile,email,entitlements")),
 		NATSURLs:                 splitCSV(envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222")),
