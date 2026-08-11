@@ -33,8 +33,7 @@ pub async fn connect_nats(
 
     let mut options = ConnectOptions::new()
         .ignore_discovered_servers()
-        .retain_servers_order()
-        .tls_first();
+        .retain_servers_order();
 
     if let Some(prefix) = inbox_prefix {
         options = options.custom_inbox_prefix(prefix);
@@ -54,7 +53,7 @@ pub async fn connect_nats(
     }
 
     if parsed.scheme() == "tls" {
-        options = options.require_tls(true);
+        options = options.require_tls(true).tls_first();
     }
 
     options
