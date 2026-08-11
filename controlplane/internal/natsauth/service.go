@@ -106,14 +106,14 @@ func authorize(req *jwt.AuthorizationRequest, cfg config.Config, tickets *ticket
 
 	claims, err := tickets.Parse(req.ConnectOptions.Token)
 	if err != nil {
-		return "", callout.ErrAbortRequest
+		return "", fmt.Errorf("validate tunnel ticket: %w", err)
 	}
 	if _, err := routeauth.AuthorizeStrictSubdomain([]string{claims.Entitlement}, claims.Route, cfg.AllowedRouteSuffix); err != nil {
-		return "", callout.ErrAbortRequest
+		return "", fmt.Errorf("authorize tunnel route: %w", err)
 	}
 	subject, err := routeauth.Subject(cfg.NATSRequestSubjectPrefix, claims.Route)
 	if err != nil {
-		return "", callout.ErrAbortRequest
+		return "", fmt.Errorf("map tunnel route subject: %w", err)
 	}
 
 	user := jwt.NewUserClaims(req.UserNkey)
