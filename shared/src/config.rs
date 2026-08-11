@@ -1,6 +1,40 @@
 //! Typed TOML configuration and the override layer shared by both binaries.
+//!
+//! Client files support two shapes. The original flat shape describes one
+//! route and remains supported. The multi-route shape declares shared values
+//! under `[defaults]` and independently authenticated hostnames under
+//! `[[routes]]`. Resolution is deliberately shallow and predictable:
+//!
+//! `CLI/environment override > route value > shared default > typed default`.
+//!
+//! OAuth fields follow the same rule, except `hostname` always comes from its
+//! route. This lets one Authentik service principal and secret file serve all
+//! of its entitled hostnames without copying credentials into every entry.
+//!
+//! ```toml
+//! [defaults]
+//! nats_url = "tls://nats-pipe.example.com:443"
+//! backend_addr = "127.0.0.1:443"
+//! http_backend_addr = "127.0.0.1:80"
+//!
+//! [defaults.oauth]
+//! token_url = "https://auth.example.com/application/o/token/"
+//! provider_client_id = "lfp-pipe"
+//! username = "lfp-pipe-team"
+//! client_secret_file = "/run/secrets/client-secret"
+//! control_plane_url = "https://manage-pipe.example.com"
+//!
+//! [[routes]]
+//! client_id = "site-a"
+//! hostname = "site-a.pipe.example.com"
+//!
+//! [[routes]]
+//! client_id = "site-b"
+//! hostname = "site-b.pipe.example.com"
+//! backend_addr = "127.0.0.1:8443"
+//! ```
 
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use anyhow::Context;
 use clap::ValueEnum;
@@ -169,7 +203,7 @@ pub struct ClientOAuthConfig {
 }
 
 /// Optional client values supplied by Clap after CLI/environment resolution.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ClientOverrides {
     /// Override for [`ClientConfig::client_id`].
     pub client_id: Option<String>,
@@ -183,6 +217,123 @@ pub struct ClientOverrides {
     pub request_subject: Option<String>,
     /// Override for [`ClientConfig::claim_ack_timeout_ms`].
     pub claim_ack_timeout_ms: Option<u64>,
+}
+
+/// Shared values inherited by every route in a multi-route client file.
+///
+/// Put stable transport, credential, and backend values here. A route may
+/// override any field, which is useful when most hostnames terminate at Caddy
+/// on ports 80/443 but one hostname maps to a different local service.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ClientConfigDefaults {
+    /// Default NATS URL used exclusively for control-plane messages.
+    #[serde(default)]
+    pub nats_url: Option<String>,
+    /// Default file containing a NATS bearer token.
+    #[serde(default)]
+    pub nats_token_file: Option<String>,
+    /// Default Authentik exchange settings shared by route sessions.
+    #[serde(default)]
+    pub oauth: Option<ClientOAuthDefaults>,
+    /// Default stream-copy implementation.
+    #[serde(default)]
+    pub relay_mode: Option<RelayMode>,
+    /// Default NATS connection-request subject.
+    #[serde(default)]
+    pub request_subject: Option<String>,
+    /// Default maximum wait for the server's claim decision.
+    #[serde(default)]
+    pub claim_ack_timeout_ms: Option<u64>,
+    /// Default private destination for TLS or raw TCP traffic.
+    #[serde(default)]
+    pub backend_addr: Option<String>,
+    /// Default private destination for plaintext HTTP traffic.
+    #[serde(default)]
+    pub http_backend_addr: Option<String>,
+}
+
+/// Inheritable Authentik settings for multi-route client files.
+///
+/// All fields are optional at this layer because a route can fill in or
+/// replace individual values. Once defaults and route values are merged, every
+/// required OAuth field is validated before any network session is started.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ClientOAuthDefaults {
+    /// Authentik OAuth token endpoint.
+    #[serde(default)]
+    pub token_url: Option<String>,
+    /// Public OAuth provider client identifier.
+    #[serde(default)]
+    pub provider_client_id: Option<String>,
+    /// Authentik service-account username.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// File containing the service-account app password.
+    #[serde(default)]
+    pub client_secret_file: Option<String>,
+    /// Browser-visible LFP Pipe control-plane origin.
+    #[serde(default)]
+    pub control_plane_url: Option<String>,
+    /// OAuth scopes requested from Authentik.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+    /// Renew the NATS connection this many seconds before ticket expiry.
+    #[serde(default)]
+    pub renew_before_seconds: Option<u64>,
+}
+
+/// One independently authenticated hostname in a multi-route client file.
+///
+/// Each entry expands into a normal [`ClientConfig`] with exactly one
+/// [`BackendRule`]. Consequently OAuth acquisition, NATS subscription, ticket
+/// renewal, and failures are isolated per hostname while sharing one process.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientRouteConfig {
+    /// Stable identifier included in claims and callback prefixes.
+    pub client_id: String,
+    /// Exact hostname used for OAuth ticket issuance and backend matching.
+    pub hostname: String,
+    /// Optional backend pattern; defaults to the exact hostname.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Route-specific NATS URL override.
+    #[serde(default)]
+    pub nats_url: Option<String>,
+    /// Route-specific NATS bearer-token file override.
+    #[serde(default)]
+    pub nats_token_file: Option<String>,
+    /// Route-specific Authentik settings layered over shared OAuth defaults.
+    #[serde(default)]
+    pub oauth: Option<ClientOAuthDefaults>,
+    /// Route-specific stream-copy implementation override.
+    #[serde(default)]
+    pub relay_mode: Option<RelayMode>,
+    /// Route-specific NATS connection-request subject override.
+    #[serde(default)]
+    pub request_subject: Option<String>,
+    /// Route-specific claim acknowledgement timeout override.
+    #[serde(default)]
+    pub claim_ack_timeout_ms: Option<u64>,
+    /// Route-specific private destination for TLS or raw TCP traffic.
+    #[serde(default)]
+    pub backend_addr: Option<String>,
+    /// Route-specific private destination for plaintext HTTP traffic.
+    #[serde(default)]
+    pub http_backend_addr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MultiRouteClientConfig {
+    #[serde(default)]
+    defaults: ClientConfigDefaults,
+    routes: Vec<ClientRouteConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ClientConfigDocument {
+    MultiRoute(MultiRouteClientConfig),
+    Legacy(ClientConfig),
 }
 
 impl ClientConfig {
@@ -286,15 +437,170 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
 
 /// Load client TOML without applying CLI or environment overrides.
 pub fn load_client_config(path: &Path) -> anyhow::Result<ClientConfig> {
+    let mut configs = load_client_configs(path)?;
+    anyhow::ensure!(
+        configs.len() == 1,
+        "client config {} contains {} routes; use load_client_configs",
+        path.display(),
+        configs.len()
+    );
+    Ok(configs.remove(0))
+}
+
+/// Load one legacy client or expand a multi-route TOML file into route sessions.
+///
+/// Multi-route expansion completes all inheritance and validation up front.
+/// Callers therefore receive the same concrete [`ClientConfig`] type used by
+/// the legacy runtime and do not need configuration-shape branches.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, neither supported TOML shape
+/// can be parsed, inherited required values are missing, or route client IDs
+/// are duplicated within the process.
+pub fn load_client_configs(path: &Path) -> anyhow::Result<Vec<ClientConfig>> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read client config {}", path.display()))?;
-    toml::from_str(&raw)
+    parse_client_configs(&raw)
         .with_context(|| format!("failed to parse client config {}", path.display()))
+}
+
+fn parse_client_configs(raw: &str) -> anyhow::Result<Vec<ClientConfig>> {
+    let document: ClientConfigDocument = toml::from_str(raw)?;
+    match document {
+        ClientConfigDocument::Legacy(config) => Ok(vec![config]),
+        ClientConfigDocument::MultiRoute(config) => {
+            expand_client_routes(config).context("invalid multi-route client config")
+        }
+    }
+}
+
+fn expand_client_routes(document: MultiRouteClientConfig) -> anyhow::Result<Vec<ClientConfig>> {
+    anyhow::ensure!(
+        !document.routes.is_empty(),
+        "at least one [[routes]] entry is required"
+    );
+    let mut client_ids = HashSet::new();
+    document
+        .routes
+        .into_iter()
+        .enumerate()
+        .map(|(index, route)| {
+            anyhow::ensure!(
+                client_ids.insert(route.client_id.clone()),
+                "route {} repeats client_id {}",
+                index + 1,
+                route.client_id
+            );
+            expand_client_route(&document.defaults, route)
+                .with_context(|| format!("route {}", index + 1))
+        })
+        .collect()
+}
+
+fn expand_client_route(
+    defaults: &ClientConfigDefaults,
+    route: ClientRouteConfig,
+) -> anyhow::Result<ClientConfig> {
+    anyhow::ensure!(
+        !route.client_id.trim().is_empty(),
+        "client_id cannot be empty"
+    );
+    anyhow::ensure!(
+        !route.hostname.trim().is_empty(),
+        "hostname cannot be empty"
+    );
+    let nats_url = route
+        .nats_url
+        .or_else(|| defaults.nats_url.clone())
+        .context("nats_url is required in the route or [defaults]")?;
+    let backend_addr = route
+        .backend_addr
+        .or_else(|| defaults.backend_addr.clone())
+        .context("backend_addr is required in the route or [defaults]")?;
+    let oauth = merge_oauth_defaults(
+        defaults.oauth.as_ref(),
+        route.oauth.as_ref(),
+        &route.hostname,
+    )?;
+
+    Ok(ClientConfig {
+        client_id: route.client_id,
+        nats_url,
+        nats_token_file: route
+            .nats_token_file
+            .or_else(|| defaults.nats_token_file.clone()),
+        oauth,
+        relay_mode: route.relay_mode.or(defaults.relay_mode).unwrap_or_default(),
+        request_subject: route
+            .request_subject
+            .or_else(|| defaults.request_subject.clone())
+            .unwrap_or_else(default_request_subject),
+        claim_ack_timeout_ms: route
+            .claim_ack_timeout_ms
+            .or(defaults.claim_ack_timeout_ms)
+            .unwrap_or_else(default_claim_ack_timeout_ms),
+        backend_rules: vec![BackendRule {
+            pattern: route.pattern.unwrap_or(route.hostname),
+            backend_addr,
+            http_backend_addr: route
+                .http_backend_addr
+                .or_else(|| defaults.http_backend_addr.clone()),
+        }],
+    })
+}
+
+fn merge_oauth_defaults(
+    defaults: Option<&ClientOAuthDefaults>,
+    route: Option<&ClientOAuthDefaults>,
+    hostname: &str,
+) -> anyhow::Result<Option<ClientOAuthConfig>> {
+    if defaults.is_none() && route.is_none() {
+        return Ok(None);
+    }
+
+    let value = |select: fn(&ClientOAuthDefaults) -> &Option<String>, name: &str| {
+        route
+            .and_then(|settings| select(settings).clone())
+            .or_else(|| defaults.and_then(|settings| select(settings).clone()))
+            .with_context(|| format!("oauth.{name} is required in the route or [defaults.oauth]"))
+    };
+    let token_url = value(|settings| &settings.token_url, "token_url")?;
+    let provider_client_id = value(
+        |settings| &settings.provider_client_id,
+        "provider_client_id",
+    )?;
+    let username = value(|settings| &settings.username, "username")?;
+    let client_secret_file = value(
+        |settings| &settings.client_secret_file,
+        "client_secret_file",
+    )?;
+    let control_plane_url = value(|settings| &settings.control_plane_url, "control_plane_url")?;
+
+    Ok(Some(ClientOAuthConfig {
+        token_url,
+        provider_client_id,
+        username,
+        client_secret_file,
+        control_plane_url,
+        hostname: hostname.to_string(),
+        scopes: route
+            .and_then(|settings| settings.scopes.clone())
+            .or_else(|| defaults.and_then(|settings| settings.scopes.clone()))
+            .unwrap_or_else(default_oauth_scopes),
+        renew_before_seconds: route
+            .and_then(|settings| settings.renew_before_seconds)
+            .or_else(|| defaults.and_then(|settings| settings.renew_before_seconds))
+            .unwrap_or_else(default_oauth_renew_before_seconds),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides};
+    use super::{
+        ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides,
+        parse_client_configs,
+    };
 
     #[test]
     fn server_defaults_and_overrides_are_layered() {
@@ -374,5 +680,125 @@ mod tests {
             config.backend_rules[0].resolved_http_backend_addr(),
             config.backend_rules[0].resolved_backend_addr()
         );
+    }
+
+    #[test]
+    fn multi_route_clients_inherit_shared_oauth_and_backends() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "tls://nats.example.com:443"
+                backend_addr = ":443"
+                http_backend_addr = ":80"
+                relay_mode = "buffered"
+
+                [defaults.oauth]
+                token_url = "https://auth.example.com/application/o/token/"
+                provider_client_id = "lfp-pipe"
+                username = "lfp-pipe-team"
+                client_secret_file = "/run/secrets/client-secret"
+                control_plane_url = "https://manage-pipe.example.com"
+
+                [[routes]]
+                client_id = "alpha"
+                hostname = "alpha.pipe.example.com"
+
+                [[routes]]
+                client_id = "beta"
+                hostname = "beta.pipe.example.com"
+                backend_addr = ":8443"
+            "#,
+        )
+        .expect("multi-route config");
+
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].relay_mode, RelayMode::Buffered);
+        assert_eq!(
+            configs[0].backend_rules[0].pattern,
+            "alpha.pipe.example.com"
+        );
+        assert_eq!(
+            configs[0].backend_rules[0].resolved_backend_addr(),
+            "127.0.0.1:443"
+        );
+        assert_eq!(
+            configs[0].backend_rules[0].resolved_http_backend_addr(),
+            "127.0.0.1:80"
+        );
+        assert_eq!(
+            configs[1].backend_rules[0].resolved_backend_addr(),
+            "127.0.0.1:8443"
+        );
+        assert_eq!(
+            configs[1].oauth.as_ref().expect("OAuth").hostname,
+            "beta.pipe.example.com"
+        );
+        assert_eq!(
+            configs[1].oauth.as_ref().expect("OAuth").username,
+            "lfp-pipe-team"
+        );
+    }
+
+    #[test]
+    fn multi_route_client_allows_nested_route_oauth_overrides() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "tls://nats.example.com:443"
+                backend_addr = ":443"
+
+                [defaults.oauth]
+                token_url = "https://auth.example.com/application/o/token/"
+                provider_client_id = "lfp-pipe"
+                username = "shared-principal"
+                client_secret_file = "/run/secrets/client-secret"
+                control_plane_url = "https://manage-pipe.example.com"
+
+                [[routes]]
+                client_id = "special"
+                hostname = "special.pipe.example.com"
+
+                [routes.oauth]
+                username = "special-principal"
+            "#,
+        )
+        .expect("route OAuth override");
+
+        let oauth = configs[0].oauth.as_ref().expect("OAuth");
+        assert_eq!(oauth.username, "special-principal");
+        assert_eq!(oauth.provider_client_id, "lfp-pipe");
+    }
+
+    #[test]
+    fn multi_route_client_rejects_duplicate_client_ids() {
+        let error = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [[routes]]
+                client_id = "duplicate"
+                hostname = "one.example.com"
+
+                [[routes]]
+                client_id = "duplicate"
+                hostname = "two.example.com"
+            "#,
+        )
+        .expect_err("duplicate IDs must fail");
+        assert!(
+            format!("{error:#}").contains("repeats client_id duplicate"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn checked_in_multi_route_example_stays_parseable() {
+        let configs = parse_client_configs(include_str!("../../client.multi.example.toml"))
+            .expect("checked-in multi-route example");
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].client_id, "desktop-web");
+        assert_eq!(configs[1].client_id, "desktop-admin");
     }
 }

@@ -1,0 +1,32 @@
+# Values in [defaults] apply to every [[routes]] entry. A route only needs to
+# declare what is unique, and can override any default when necessary.
+[defaults]
+nats_url = "tls://nats-pipe.example.com:443"
+relay_mode = "auto"
+claim_ack_timeout_ms = 1500
+backend_addr = "127.0.0.1:443"
+http_backend_addr = "127.0.0.1:80"
+
+# One entitled Authentik service principal can request an exact ticket for
+# each hostname. Keep the real secret outside this repository.
+[defaults.oauth]
+token_url = "https://auth.example.com/application/o/token/"
+provider_client_id = "lfp-pipe"
+username = "lfp-pipe-team-ab12cd34"
+client_secret_file = "/run/secrets/lfp_pipe_client_secret"
+control_plane_url = "https://manage-pipe.example.com"
+renew_before_seconds = 60
+
+[[routes]]
+client_id = "desktop-web"
+hostname = "web.pipe.example.com"
+
+[[routes]]
+client_id = "desktop-admin"
+hostname = "admin.pipe.example.com"
+backend_addr = "127.0.0.1:8443"
+
+# Nested route settings override only the matching shared OAuth fields.
+[routes.oauth]
+username = "lfp-pipe-admin-ef56ab78"
+client_secret_file = "/run/secrets/lfp_pipe_admin_secret"

@@ -110,6 +110,21 @@ exact-route NATS ticket from the control plane, and reconnects with a renewed
 ticket before expiration. Keep the one-time app password in a protected file;
 do not put real NATS or OAuth credentials in tracked configuration.
 
+One process can also maintain several independently authenticated hostnames.
+Start from [`client.multi.example.toml`](client.multi.example.toml): shared
+transport, backend, and Authentik values live under `[defaults]` and
+`[defaults.oauth]`, while each `[[routes]]` entry supplies its `client_id` and
+exact `hostname`. Route-level values win over shared defaults, including a
+nested `[routes.oauth]` table for the most recently declared route. The full
+precedence order is CLI/environment override, route value, shared default,
+then typed default. Because `client_id` must remain unique per active route,
+the `--client-id` override is rejected when a file contains multiple routes.
+
+Each route gets its own OAuth ticket renewal and NATS subscription. If one
+route fails, the process exits so a service supervisor can restart the whole
+declared set instead of silently leaving only some hostnames available. The
+original flat single-route format remains supported without changes.
+
 Routes that terminate TLS locally can send plaintext HTTP to a separate
 listener without another tunnel. Set `backend_addr` to the TLS/default socket
 and `http_backend_addr` to Caddy's HTTP socket. The client peeks at the first

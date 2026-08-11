@@ -22,6 +22,7 @@ use shared::{
 use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
+    task::JoinSet,
     time::{sleep, timeout},
 };
 use tracing::{Level, debug, enabled, info, warn};
@@ -37,6 +38,43 @@ pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
     // NATS and HTTPS share Rustls but enable different provider defaults. Select
     // Ring once so both transports use one deterministic process-wide provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    run_session(config).await
+}
+
+/// Run all route sessions expanded from one multi-route configuration file.
+///
+/// Each route owns its NATS subscription and OAuth renewal loop. This is
+/// required for route-scoped credentials: one service principal may be
+/// entitled to several hostnames, but each hostname receives its own ticket.
+/// If any route exits or fails, the process returns an error so a supervisor
+/// can restart the complete, declarative set instead of leaving partial
+/// coverage running unnoticed.
+///
+/// # Errors
+///
+/// Returns an error if no routes were supplied, a route task panics, or any
+/// route's authentication, NATS subscription, or renewal loop terminates.
+pub async fn run_all(configs: Vec<ClientConfig>) -> anyhow::Result<()> {
+    anyhow::ensure!(!configs.is_empty(), "at least one client route is required");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut sessions = JoinSet::new();
+    for config in configs {
+        let client_id = config.client_id.clone();
+        sessions.spawn(async move { (client_id, run_session(config).await) });
+    }
+
+    let joined = sessions
+        .join_next()
+        .await
+        .context("client route task ended unexpectedly")?;
+    let (client_id, result) = joined.context("client route task panicked")?;
+    match result {
+        Ok(()) => Err(anyhow!("client route {client_id} stopped unexpectedly")),
+        Err(error) => Err(error).with_context(|| format!("client route {client_id} failed")),
+    }
+}
+
+async fn run_session(config: ClientConfig) -> anyhow::Result<()> {
     if let Some(oauth) = config.oauth.clone() {
         return run_oauth(config, oauth).await;
     }

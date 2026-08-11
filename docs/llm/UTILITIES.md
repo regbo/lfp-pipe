@@ -5,8 +5,9 @@ the server or client crates.
 
 | Public utility | Location | Responsibility | Main consumers |
 |---|---|---|---|
-| `parse_server_runtime`, `parse_client_runtime` | `shared/src/cli.rs` | Resolve Clap flags and environment variables, then layer them over TOML configuration. | Binary entry points |
-| `ServerConfig`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define typed component configuration, defaults, and routing data. | CLI, server, client |
+| `parse_server_runtime`, `parse_client_runtime` | `shared/src/cli.rs` | Resolve Clap flags and environment variables, then layer them over TOML configuration; client parsing expands all route sessions. | Binary entry points |
+| `ServerConfig`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define concrete typed component configuration, defaults, and routing data. | CLI, server, client |
+| `ClientConfigDefaults`, `ClientRouteConfig`, `load_client_configs` | `shared/src/config.rs` | Inherit shared settings into independently authenticated hostname sessions while retaining the legacy single-route format. | Multi-route tunnel client |
 | `ClientOAuthConfig` | `shared/src/config.rs` | Configure Authentik machine credentials and automatic route-ticket renewal without storing NATS tickets. | Tunnel client |
 | `extract_http_host`, `looks_like_http_prefix` | `shared/src/http.rs` | Detect supported HTTP prefixes and extract a normalized Host header. | Public server routing |
 | `copy_bidirectional_with_mode` | `shared/src/io.rs` | Select splice or bounded buffered bidirectional TCP forwarding. | Server and client relays |

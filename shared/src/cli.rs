@@ -13,7 +13,7 @@ use clap::{Args, Parser};
 use crate::{
     config::{
         ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides,
-        load_client_config, load_server_config,
+        load_client_configs, load_server_config,
     },
     logging::DEFAULT_LOG_FILTER,
 };
@@ -153,15 +153,24 @@ struct ClientCli {
 }
 
 impl ClientCli {
-    fn load(self) -> anyhow::Result<RuntimeConfig<ClientConfig>> {
-        let config = load_client_config(&self.common.config)?.with_overrides(ClientOverrides {
+    fn load(self) -> anyhow::Result<RuntimeConfig<Vec<ClientConfig>>> {
+        let overrides = ClientOverrides {
             client_id: self.client_id,
             nats_url: self.nats_url,
             nats_token_file: self.nats_token_file,
             relay_mode: self.relay_mode,
             request_subject: self.request_subject,
             claim_ack_timeout_ms: self.claim_ack_timeout_ms,
-        });
+        };
+        let loaded = load_client_configs(&self.common.config)?;
+        anyhow::ensure!(
+            loaded.len() == 1 || overrides.client_id.is_none(),
+            "--client-id/LFP_PIPE_CLIENT_ID cannot override a multi-route config"
+        );
+        let config = loaded
+            .into_iter()
+            .map(|config| config.with_overrides(overrides.clone()))
+            .collect();
         Ok(RuntimeConfig {
             config,
             log_filter: self.common.log_filter,
@@ -175,7 +184,7 @@ pub fn parse_server_runtime() -> anyhow::Result<RuntimeConfig<ServerConfig>> {
 }
 
 /// Parse and layer client configuration from CLI flags, environment, and TOML.
-pub fn parse_client_runtime() -> anyhow::Result<RuntimeConfig<ClientConfig>> {
+pub fn parse_client_runtime() -> anyhow::Result<RuntimeConfig<Vec<ClientConfig>>> {
     ClientCli::parse().load()
 }
 
