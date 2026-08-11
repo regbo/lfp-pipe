@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
-import { ArrowRight, Check, Copy, Download, KeyRound, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
 import brandLogo from "./lfp-connect-reversed.svg";
 import "./styles.css";
 
@@ -45,6 +45,8 @@ function App() {
   const [principalsLoading, setPrincipalsLoading] = useState(true);
   const [principalsError, setPrincipalsError] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<number | null>(null);
+  const [creatingPrincipal, setCreatingPrincipal] = useState(false);
+  const [deletingPrincipal, setDeletingPrincipal] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [copied, setCopied] = useState("");
@@ -93,7 +95,7 @@ function App() {
   }
 
   async function createPrincipal(event: React.FormEvent) {
-    event.preventDefault(); setError(""); setCreatedPrincipal(null); setWorking(true);
+    event.preventDefault(); setError(""); setCreatedPrincipal(null); setCreatingPrincipal(true);
     try {
       const created = await api<CreatedPrincipal>("/api/service-principals", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -103,17 +105,18 @@ function App() {
       setPrincipalName("");
       await loadPrincipals();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Service principal creation failed."); }
-    finally { setWorking(false); }
+    finally { setCreatingPrincipal(false); }
   }
 
   async function deletePrincipal(principal: ServicePrincipal) {
-    setError("");
+    setError(""); setDeletingPrincipal(principal.id);
     try {
       await api<void>(`/api/service-principals/${principal.id}`, { method: "DELETE" });
       if (createdPrincipal?.service_principal.id === principal.id) setCreatedPrincipal(null);
       setDeleteCandidate(null);
       await loadPrincipals();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Deletion failed."); }
+    finally { setDeletingPrincipal(null); }
   }
 
   async function copy(label: string, value: string) {
@@ -199,10 +202,10 @@ http_backend_addr = "127.0.0.1:80"
 
         <section className="section-card principals-card">
           <div className="section-title"><span className="icon-box"><Server size={20} /></span><div><h2>Service principals</h2><p>Revocable Authentik identities that renew tunnel credentials through OAuth.</p></div></div>
-          <form className="principal-form" onSubmit={createPrincipal}>
-            <div className="field"><label htmlFor="principal-name">Name</label><input id="principal-name" value={principalName} onChange={(event) => setPrincipalName(event.target.value)} placeholder="desktop-speedtest" required /></div>
-            <div className="field"><label htmlFor="principal-entitlement">Entitlement</label><select id="principal-entitlement" value={principalEntitlement} onChange={(event) => setPrincipalEntitlement(event.target.value)} required>{effectiveEntitlements.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-            <button className="button" disabled={working || !principalEntitlement}>Create principal<ArrowRight size={17} /></button>
+          <form className="principal-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}>
+            <div className="field"><label htmlFor="principal-name">Name</label><input id="principal-name" value={principalName} onChange={(event) => setPrincipalName(event.target.value)} placeholder="desktop-speedtest" disabled={creatingPrincipal} required /></div>
+            <div className="field"><label htmlFor="principal-entitlement">Entitlement</label><select id="principal-entitlement" value={principalEntitlement} onChange={(event) => setPrincipalEntitlement(event.target.value)} disabled={creatingPrincipal} required>{effectiveEntitlements.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+            <button className="button" disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? <><LoaderCircle className="button-spinner" size={17} />Creating…</> : <>Create principal<ArrowRight size={17} /></>}</button>
           </form>
 
           {createdPrincipal && <div className="secret-once" role="status">
@@ -214,7 +217,7 @@ http_backend_addr = "127.0.0.1:80"
           </div>}
 
           <div className="principal-list">
-            {principalsLoading ? <p className="empty-entitlement">Loading service principals…</p> : principalsError ? <p className="error">{principalsError}</p> : principals.length === 0 ? <p className="empty-entitlement">No service principals yet.</p> : principals.map((principal) => <div className="principal-row" key={principal.id}><div><strong>{principal.username}</strong><span>{principal.client_id || "Existing client"} · {principal.entitlement}</span></div><button className={`icon-button${deleteCandidate === principal.id ? " confirm-delete" : ""}`} title={deleteCandidate === principal.id ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} onClick={() => deleteCandidate === principal.id ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleteCandidate === principal.id ? "Confirm" : <Trash2 size={17} />}</button></div>)}
+            {principalsLoading ? <p className="empty-entitlement">Loading service principals…</p> : principalsError ? <p className="error">{principalsError}</p> : principals.length === 0 ? <p className="empty-entitlement">No service principals yet.</p> : principals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><div><strong>{principal.username}</strong><span>{principal.client_id || "Existing client"} · {principal.entitlement}</span></div><button className={`icon-button${confirming || deleting ? " confirm-delete" : ""}`} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</button></div>; })}
           </div>
         </section>
         {error && <p className="error global-error" role="alert">{error}</p>}

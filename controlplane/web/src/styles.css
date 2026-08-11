@@ -56,6 +56,7 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .button.secondary { background: transparent; color: var(--color-text); border: 1px solid var(--color-line-strong); }
 .button.compact { min-height: 2.45rem; padding: 0.55rem 0.8rem; font-size: 0.82rem; }
 .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.button-spinner { animation: spin 850ms linear infinite; }
 
 .identity { display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 0.8rem; border: 1px solid var(--color-line); border-radius: var(--radius-md); }
 .avatar { width: 2.25rem; height: 2.25rem; display: grid; place-items: center; border-radius: 50%; background: var(--color-brand); color: var(--color-brand-ink); font-weight: 900; }
@@ -102,7 +103,7 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .principal-row strong { font-family: var(--font-mono); font-size: 0.82rem; }
 .principal-row span { margin-top: 0.3rem; color: var(--color-muted); font-size: 0.73rem; }
 .icon-button { width: 2.45rem; height: 2.45rem; flex: none; display: grid; place-items: center; color: var(--color-danger); background: transparent; border: 1px solid var(--color-line-strong); border-radius: var(--radius-sm); cursor: pointer; }
-.icon-button.confirm-delete { width: auto; padding: 0 0.8rem; color: var(--color-brand-ink); background: var(--color-danger); font-size: 0.75rem; font-weight: 800; }
+.icon-button.confirm-delete { width: auto; padding: 0 0.8rem; display: inline-flex; gap: 0.45rem; color: var(--color-brand-ink); background: var(--color-danger); font-size: 0.75rem; font-weight: 800; }
 .secret-once { padding: 1rem; display: grid; gap: 0.8rem; border: 1px solid rgba(255, 194, 71, 0.35); border-radius: var(--radius-md); background: rgba(255, 194, 71, 0.06); }
 .secret-once > div:first-child { display: grid; gap: 0.2rem; }
 .secret-once > div:first-child span { color: var(--color-warn); font-size: 0.75rem; }
