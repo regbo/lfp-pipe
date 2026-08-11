@@ -1,12 +1,4 @@
-/target/
-/.mise/
-/.idea/
-/.vscode/
+target/
+controlplane/web/node_modules/
+controlplane/web/dist/
 *.log
-*.tmp
-*.temp
-.DS_Store
-Thumbs.db
-Desktop.ini
-$null
-nul
