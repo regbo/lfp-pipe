@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 140" role="img" aria-labelledby="title desc">
+  <title id="title">lfp connect</title>
+  <desc id="desc">Stylized lowercase coral LFP monogram with a warm white connect wordmark.</desc>
+  <g fill="#FF6F61">
+    <path d="M12 8h26v91c0 9 5 14 15 14h5v23H46c-22 0-34-13-34-35V8Z"/>
+    <path d="M61 136V61H49V39h12v-5C61 13 73 2 95 2h20v23H98c-8 0-11 4-11 11v3h28v22H87v75H61Z"/>
+    <path fill-rule="evenodd" d="M94 39h25v9c8-8 18-12 29-12 27 0 42 21 42 50s-15 50-42 50c-11 0-20-4-28-11v15H94V39Zm48 74c14 0 22-11 22-27s-8-27-22-27-23 11-23 27 9 27 23 27Z"/>
+  </g>
+  <text x="220" y="105" fill="#FFF9F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="76" font-weight="520" letter-spacing="-2">connect</text>
+</svg>
