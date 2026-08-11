@@ -15,6 +15,21 @@ pub async fn connect_nats(
     token_file: Option<&str>,
     inbox_prefix: Option<&str>,
 ) -> anyhow::Result<Client> {
+    let token = token_file
+        .map(|path| {
+            fs::read_to_string(path)
+                .with_context(|| format!("failed to read NATS token file {path}"))
+        })
+        .transpose()?;
+    connect_nats_with_token(nats_url, token.as_deref().map(str::trim), inbox_prefix).await
+}
+
+/// Connect to NATS with an in-memory bearer token obtained through OAuth.
+pub async fn connect_nats_with_token(
+    nats_url: &str,
+    token: Option<&str>,
+    inbox_prefix: Option<&str>,
+) -> anyhow::Result<Client> {
     let parsed = Url::parse(nats_url).context("failed to parse NATS URL")?;
 
     ensure!(
@@ -39,13 +54,11 @@ pub async fn connect_nats(
         options = options.custom_inbox_prefix(prefix);
     }
 
-    if let Some(path) = token_file {
-        let token = fs::read_to_string(path)
-            .with_context(|| format!("failed to read NATS token file {path}"))?;
-        options = options.token(token.trim().to_string());
+    if let Some(token) = token {
+        options = options.token(token.to_string());
     }
 
-    if token_file.is_none() && (!parsed.username().is_empty() || parsed.password().is_some()) {
+    if token.is_none() && (!parsed.username().is_empty() || parsed.password().is_some()) {
         options = options.user_and_password(
             parsed.username().to_string(),
             parsed.password().unwrap_or_default().to_string(),

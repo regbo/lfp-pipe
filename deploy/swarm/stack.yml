@@ -44,6 +44,10 @@ services:
       LFP_AUTH_OIDC_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:?set AUTHENTIK_CLIENT_ID}
       LFP_AUTH_OIDC_SCOPES: openid,profile,email,entitlements
       LFP_AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/authentik_client_secret
+      LFP_AUTH_AUTHENTIK_API_URL: ${AUTHENTIK_API_URL:?set AUTHENTIK_API_URL}
+      LFP_AUTH_AUTHENTIK_API_TOKEN_FILE: /run/secrets/authentik_api_token
+      LFP_AUTH_AUTHENTIK_APPLICATION_SLUG: ${AUTHENTIK_APPLICATION_SLUG:-lfp-pipe}
+      LFP_AUTH_OAUTH_TOKEN_URL: ${AUTHENTIK_TOKEN_URL:?set AUTHENTIK_TOKEN_URL}
       LFP_AUTH_COOKIE_SECRET_FILE: /run/secrets/lfp_cookie_secret
       LFP_AUTH_TICKET_SECRET_FILE: /run/secrets/lfp_ticket_secret
       LFP_AUTH_NATS_URLS: nats://nats:4222
@@ -58,6 +62,7 @@ services:
       LFP_AUTH_TICKET_TTL_MINUTES: ${LFP_TICKET_TTL_MINUTES:-15}
     secrets:
       - authentik_client_secret
+      - authentik_api_token
       - lfp_cookie_secret
       - lfp_ticket_secret
       - nats_callout_password
@@ -123,6 +128,8 @@ configs:
 
 secrets:
   authentik_client_secret:
+    external: true
+  authentik_api_token:
     external: true
   lfp_cookie_secret:
     external: true

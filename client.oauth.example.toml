@@ -1,0 +1,17 @@
+client_id = "desktop-speedtest"
+nats_url = "tls://nats-pipe.example.com:443"
+relay_mode = "auto"
+claim_ack_timeout_ms = 1500
+
+[oauth]
+token_url = "https://auth.example.com/application/o/token/"
+provider_client_id = "lfp-pipe"
+username = "lfp-pipe-desktop-speedtest-ab12cd34"
+client_secret_file = "/run/secrets/lfp_pipe_client_secret"
+control_plane_url = "https://manage-pipe.example.com"
+hostname = "speedtest.pipe.example.com"
+renew_before_seconds = 60
+
+[[backend_rules]]
+pattern = "speedtest.pipe.example.com"
+backend_addr = "127.0.0.1:443"

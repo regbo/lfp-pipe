@@ -19,6 +19,10 @@ type Config struct {
 	OIDCClientID             string
 	OIDCClientSecret         string
 	OIDCScopes               []string
+	AuthentikAPIURL          string
+	AuthentikAPIToken        string
+	AuthentikApplicationSlug string
+	OAuthTokenURL            string
 	CookieSecret             []byte
 	TicketSecret             []byte
 	TicketTTL                time.Duration
@@ -42,6 +46,9 @@ func Load() (Config, error) {
 		OIDCIssuerURL:            os.Getenv("LFP_AUTH_OIDC_ISSUER_URL"),
 		OIDCClientID:             os.Getenv("LFP_AUTH_OIDC_CLIENT_ID"),
 		OIDCScopes:               splitCSV(envOr("LFP_AUTH_OIDC_SCOPES", "openid,profile,email,entitlements")),
+		AuthentikAPIURL:          strings.TrimRight(os.Getenv("LFP_AUTH_AUTHENTIK_API_URL"), "/"),
+		AuthentikApplicationSlug: envOr("LFP_AUTH_AUTHENTIK_APPLICATION_SLUG", "lfp-pipe"),
+		OAuthTokenURL:            os.Getenv("LFP_AUTH_OAUTH_TOKEN_URL"),
 		NATSURLs:                 splitCSV(envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222")),
 		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222"))),
 		NATSCalloutUser:          envOr("LFP_AUTH_NATS_CALLOUT_USER", "auth-svc"),
@@ -51,6 +58,9 @@ func Load() (Config, error) {
 
 	var err error
 	if cfg.OIDCClientSecret, err = readSecretString("LFP_AUTH_OIDC_CLIENT_SECRET_FILE"); err != nil {
+		return Config{}, err
+	}
+	if cfg.AuthentikAPIToken, err = readSecretString("LFP_AUTH_AUTHENTIK_API_TOKEN_FILE"); err != nil {
 		return Config{}, err
 	}
 	if cfg.CookieSecret, err = readSecret("LFP_AUTH_COOKIE_SECRET_FILE"); err != nil {
@@ -81,14 +91,14 @@ func Load() (Config, error) {
 	}
 	cfg.TicketTTL = time.Duration(ttlMinutes) * time.Minute
 
-	if cfg.PublicURL == "" || cfg.AllowedRouteSuffix == "" || cfg.OIDCIssuerURL == "" || cfg.OIDCClientID == "" {
-		return Config{}, errors.New("LFP_AUTH_PUBLIC_URL, LFP_AUTH_ROUTE_SUFFIX, LFP_AUTH_OIDC_ISSUER_URL, and LFP_AUTH_OIDC_CLIENT_ID are required")
+	if cfg.PublicURL == "" || cfg.AllowedRouteSuffix == "" || cfg.OIDCIssuerURL == "" || cfg.OIDCClientID == "" || cfg.AuthentikAPIURL == "" || cfg.OAuthTokenURL == "" {
+		return Config{}, errors.New("public URL, route suffix, OIDC, Authentik API, and OAuth token URL settings are required")
 	}
 	if len(cfg.CookieSecret) < 32 || len(cfg.TicketSecret) < 32 {
 		return Config{}, errors.New("cookie and ticket secrets must each contain at least 32 bytes")
 	}
-	if cfg.OIDCClientSecret == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalServerToken == "" {
-		return Config{}, errors.New("OIDC, NATS callout, issuer, and internal server secrets must not be empty")
+	if cfg.OIDCClientSecret == "" || cfg.AuthentikAPIToken == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalServerToken == "" {
+		return Config{}, errors.New("OIDC, Authentik API, NATS callout, issuer, and internal server secrets must not be empty")
 	}
 	return cfg, nil
 }

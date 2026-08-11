@@ -3,20 +3,24 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/securecookie"
+	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
 	"github.com/regbo/lfp-pipe/controlplane/internal/config"
 	"github.com/regbo/lfp-pipe/controlplane/internal/routeauth"
 	"github.com/regbo/lfp-pipe/controlplane/internal/ticket"
@@ -36,6 +40,7 @@ type Server struct {
 	verifier     *oidc.IDTokenVerifier
 	cookies      *securecookie.SecureCookie
 	tickets      *ticket.Signer
+	authentik    *authentikapi.Client
 	cookieSecure bool
 }
 
@@ -77,6 +82,7 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, logger 
 		verifier:     provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
 		cookies:      codec,
 		tickets:      tickets,
+		authentik:    authentikapi.NewClient(cfg.AuthentikAPIURL, cfg.AuthentikAPIToken),
 		cookieSecure: strings.EqualFold(mustURLScheme(cfg.PublicURL), "https"),
 	}, nil
 }
@@ -93,7 +99,179 @@ func (s *Server) Handler() http.Handler {
 	router.Post("/api/auth/logout", s.logout)
 	router.Get("/api/me", s.me)
 	router.Post("/api/tunnel-tokens", s.issueTunnelToken)
+	router.Get("/api/service-principals", s.listServicePrincipals)
+	router.Post("/api/service-principals", s.createServicePrincipal)
+	router.Delete("/api/service-principals/{id}", s.deleteServicePrincipal)
 	return router
+}
+
+type servicePrincipal struct {
+	ID          int    `json:"id"`
+	Username    string `json:"username"`
+	Name        string `json:"name"`
+	ClientID    string `json:"client_id"`
+	Entitlement string `json:"entitlement"`
+}
+
+type principalMetadata struct {
+	Managed      bool
+	OwnerSubject string
+	OwnerEmail   string
+	ClientID     string
+	Entitlement  string
+}
+
+func (s *Server) listServicePrincipals(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in with Authentik to continue.")
+		return
+	}
+	users, err := s.authentik.ListServiceAccounts(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	principals := make([]servicePrincipal, 0)
+	for _, user := range users {
+		metadata := metadataFromUser(user)
+		if metadata.Managed && metadata.OwnerSubject == session.Subject {
+			principals = append(principals, servicePrincipal{
+				ID: user.PK, Username: user.Username, Name: user.Name, ClientID: metadata.ClientID,
+				Entitlement: metadata.Entitlement,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"service_principals": principals})
+}
+
+func (s *Server) createServicePrincipal(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in with Authentik to continue.")
+		return
+	}
+	var request struct {
+		Name        string `json:"name"`
+		Entitlement string `json:"entitlement"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "Provide a name and entitlement.")
+		return
+	}
+	name, err := routeauth.ClientID(request.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entitlement, err := ownedEntitlement(session.Entitlements, request.Entitlement, s.cfg.AllowedRouteSuffix)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	target, err := s.authentik.FindEntitlement(r.Context(), s.cfg.AuthentikApplicationSlug, entitlement)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	suffix := make([]byte, 4)
+	if _, err := rand.Read(suffix); err != nil {
+		s.internalError(w, fmt.Errorf("generate service principal suffix: %w", err))
+		return
+	}
+	displayName := "lfp-pipe-" + name + "-" + hex.EncodeToString(suffix)
+	attributes := map[string]any{
+		"lfp_pipe": map[string]any{
+			"managed": true, "owner_subject": session.Subject, "owner_email": session.Email,
+			"client_id": name, "entitlement": entitlement,
+		},
+	}
+	created, err := s.authentik.CreateServiceAccount(r.Context(), displayName)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := s.authentik.UpdateUserAttributes(r.Context(), created.UserPK, attributes); err != nil {
+		_ = s.authentik.DeleteUser(r.Context(), created.UserPK)
+		s.internalError(w, fmt.Errorf("store service principal ownership: %w", err))
+		return
+	}
+	if err := s.authentik.BindUser(r.Context(), created.UserPK, target.PBMUUID); err != nil {
+		_ = s.authentik.DeleteUser(r.Context(), created.UserPK)
+		s.internalError(w, fmt.Errorf("bind service principal entitlement: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"service_principal": servicePrincipal{
+			ID: created.UserPK, Username: created.Username, Name: displayName, ClientID: name,
+			Entitlement: entitlement,
+		},
+		"client_secret": created.Token,
+		"oauth": map[string]any{
+			"token_url": s.cfg.OAuthTokenURL, "client_id": s.cfg.OIDCClientID,
+			"control_plane_url": s.cfg.PublicURL, "scopes": s.cfg.OIDCScopes,
+			"nats_urls": s.cfg.NATSPublicURLs,
+		},
+	})
+}
+
+func (s *Server) deleteServicePrincipal(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in with Authentik to continue.")
+		return
+	}
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "Invalid service principal ID.")
+		return
+	}
+	user, err := s.authentik.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Service principal was not found.")
+		return
+	}
+	metadata := metadataFromUser(user)
+	if !metadata.Managed || metadata.OwnerSubject != session.Subject {
+		writeError(w, http.StatusForbidden, "You do not own this service principal.")
+		return
+	}
+	if err := s.authentik.DeleteUser(r.Context(), id); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func metadataFromUser(user authentikapi.User) principalMetadata {
+	root, _ := user.Attributes["lfp_pipe"].(map[string]any)
+	metadata := principalMetadata{}
+	metadata.Managed, _ = root["managed"].(bool)
+	metadata.OwnerSubject, _ = root["owner_subject"].(string)
+	metadata.OwnerEmail, _ = root["owner_email"].(string)
+	metadata.ClientID, _ = root["client_id"].(string)
+	metadata.Entitlement, _ = root["entitlement"].(string)
+	return metadata
+}
+
+func ownedEntitlement(values []string, requested, parent string) (string, error) {
+	requested = strings.TrimPrefix(strings.TrimSpace(requested), "route:")
+	normalized, err := routeauth.NormalizeHostname(requested)
+	if err != nil {
+		return "", err
+	}
+	if normalized != parent && !strings.HasSuffix(normalized, "."+parent) {
+		return "", fmt.Errorf("entitlement must belong to %s", parent)
+	}
+	for _, value := range values {
+		value = strings.TrimPrefix(strings.TrimSpace(value), "route:")
+		if candidate, normalizeErr := routeauth.NormalizeHostname(value); normalizeErr == nil && candidate == normalized {
+			return normalized, nil
+		}
+	}
+	return "", fmt.Errorf("you do not own entitlement %s", normalized)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +397,7 @@ func (s *Server) issueTunnelToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":           value,
 		"expires_at":      expires,
+		"expires_unix":    expires.Unix(),
 		"hostname":        route,
 		"client_id":       clientID,
 		"request_subject": subject,

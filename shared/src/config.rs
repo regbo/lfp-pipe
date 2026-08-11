@@ -129,6 +129,9 @@ pub struct ClientConfig {
     /// Optional file containing a NATS bearer token.
     #[serde(default)]
     pub nats_token_file: Option<String>,
+    /// Optional Authentik exchange used to obtain and renew route-scoped NATS tickets.
+    #[serde(default)]
+    pub oauth: Option<ClientOAuthConfig>,
     /// Stream-copy implementation used between callback and backend sockets.
     #[serde(default)]
     pub relay_mode: RelayMode,
@@ -140,6 +143,29 @@ pub struct ClientConfig {
     pub claim_ack_timeout_ms: u64,
     /// Ordered hostname-to-backend routing rules.
     pub backend_rules: Vec<BackendRule>,
+}
+
+/// Authentik machine credential and control-plane exchange configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientOAuthConfig {
+    /// Authentik OAuth token endpoint.
+    pub token_url: String,
+    /// Public OAuth provider client identifier.
+    pub provider_client_id: String,
+    /// Authentik service-account username.
+    pub username: String,
+    /// File containing the one-time service-account app password.
+    pub client_secret_file: String,
+    /// Browser-visible LFP Pipe control-plane origin.
+    pub control_plane_url: String,
+    /// Exact hostname for which route tickets are requested.
+    pub hostname: String,
+    /// OAuth scopes requested from Authentik.
+    #[serde(default = "default_oauth_scopes")]
+    pub scopes: Vec<String>,
+    /// Renew the NATS connection this many seconds before ticket expiry.
+    #[serde(default = "default_oauth_renew_before_seconds")]
+    pub renew_before_seconds: u64,
 }
 
 /// Optional client values supplied by Clap after CLI/environment resolution.
@@ -221,6 +247,19 @@ fn default_claim_ack_timeout_ms() -> u64 {
     1_500
 }
 
+fn default_oauth_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "profile".to_string(),
+        "email".to_string(),
+        "entitlements".to_string(),
+    ]
+}
+
+fn default_oauth_renew_before_seconds() -> u64 {
+    60
+}
+
 /// Load server TOML without applying CLI or environment overrides.
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = fs::read_to_string(path)
@@ -288,5 +327,31 @@ mod tests {
             config.backend_rules[0].resolved_backend_addr(),
             "127.0.0.1:8080"
         );
+    }
+
+    #[test]
+    fn client_oauth_defaults_scopes_and_renewal() {
+        let config: ClientConfig = toml::from_str(
+            r#"
+                client_id = "client-a"
+                nats_url = "tls://nats.example.com:443"
+
+                [oauth]
+                token_url = "https://auth.example.com/application/o/token/"
+                provider_client_id = "lfp-pipe"
+                username = "lfp-pipe-client-a"
+                client_secret_file = "/run/secrets/client-secret"
+                control_plane_url = "https://manage-pipe.example.com"
+                hostname = "client-a.pipe.example.com"
+
+                [[backend_rules]]
+                pattern = "client-a.pipe.example.com"
+                backend_addr = ":443"
+            "#,
+        )
+        .expect("OAuth client TOML");
+        let oauth = config.oauth.expect("OAuth configuration");
+        assert_eq!(oauth.renew_before_seconds, 60);
+        assert!(oauth.scopes.iter().any(|scope| scope == "entitlements"));
     }
 }

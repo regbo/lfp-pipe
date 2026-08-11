@@ -74,6 +74,7 @@ arguments:
 
 ```sh
 docker secret create authentik_client_secret ~/.secrets/authentik/lfp-connect/client-secret
+docker secret create authentik_api_token ~/.secrets/authentik/api-token
 openssl rand -base64 48 | docker secret create lfp_cookie_secret -
 openssl rand -base64 48 | docker secret create lfp_ticket_secret -
 openssl rand -base64 36 | docker secret create nats_callout_password -
@@ -120,9 +121,33 @@ HTTPS origin. The Authentik redirect URI must match it exactly.
 
 ## Configure a tunnel client
 
-The web console returns a token, normalized client ID, request subject, NATS
-URLs, and expiration. Store the token in a protected file and configure the
-client with the returned values:
+For a continuously running tunnel, create a service principal in the web
+console under an entitlement you own. Authentik returns its app password only
+once. Store that value in a protected file and use the OAuth configuration the
+console provides:
+
+```toml
+client_id = "unraid-east"
+nats_url = "tls://nats.example.com:443"
+
+[oauth]
+token_url = "https://auth.example.com/application/o/token/"
+provider_client_id = "lfp-pipe"
+username = "lfp-pipe-unraid-east-ab12cd34"
+client_secret_file = "/run/secrets/lfp_pipe_client_secret"
+control_plane_url = "https://manage-pipe.example.com"
+hostname = "cool.subdomain.domain"
+
+[[backend_rules]]
+pattern = "cool.subdomain.domain"
+backend_addr = "127.0.0.1:8080"
+```
+
+The client renews its Authentik access token and route-scoped NATS ticket
+automatically. Deleting the principal in the console revokes future exchanges.
+
+For a temporary manual session, the console can instead return a token,
+normalized client ID, request subject, NATS URLs, and expiration:
 
 ```toml
 client_id = "unraid-east"

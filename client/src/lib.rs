@@ -2,7 +2,9 @@
 
 #![warn(missing_docs)]
 
-use std::time::Duration;
+mod oauth;
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow};
 use async_nats::{Client, Message};
@@ -11,12 +13,16 @@ use shared::{
     config::{BackendRule, ClientConfig, RelayMode},
     io::copy_bidirectional_with_mode,
     logging::is_expected_disconnect,
-    nats::connect_nats,
+    nats::{connect_nats, connect_nats_with_token},
     prefix::PrefixEnvelope,
     protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
     routing::select_backend,
 };
-use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    time::{sleep, timeout},
+};
 use tracing::{Level, debug, enabled, info, warn};
 
 #[derive(Clone)]
@@ -27,6 +33,12 @@ struct AppState {
 
 /// Subscribe for matching requests and bridge accepted tunnels to backends.
 pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
+    // NATS and HTTPS share Rustls but enable different provider defaults. Select
+    // Ring once so both transports use one deterministic process-wide provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if let Some(oauth) = config.oauth.clone() {
+        return run_oauth(config, oauth).await;
+    }
     let inbox_prefix = format!("_LFP_INBOX.{}", config.client_id);
     let nats = connect_nats(
         &config.nats_url,
@@ -35,21 +47,92 @@ pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
     )
     .await
     .context("failed to connect to NATS")?;
+    process_messages(config.clone(), nats, config.request_subject.clone(), None).await
+}
+
+async fn run_oauth(
+    config: ClientConfig,
+    oauth_config: shared::config::ClientOAuthConfig,
+) -> anyhow::Result<()> {
+    loop {
+        let ticket = match oauth::obtain_ticket(&oauth_config, &config.client_id).await {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                warn!(?error, "OAuth ticket exchange failed; retrying");
+                sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+        };
+        if ticket.client_id != config.client_id {
+            return Err(anyhow!(
+                "control plane normalized client ID to {}; configure that exact value",
+                ticket.client_id
+            ));
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        if ticket.expires_unix <= now {
+            warn!("control plane returned an expired NATS ticket; retrying");
+            sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+        let lifetime = (ticket.expires_unix - now) as u64;
+        let renew_after = if lifetime > oauth_config.renew_before_seconds + 5 {
+            lifetime - oauth_config.renew_before_seconds
+        } else {
+            (lifetime / 2).max(1)
+        };
+        let inbox_prefix = format!("_LFP_INBOX.{}", config.client_id);
+        let nats = match connect_nats_with_token(
+            &ticket.nats_urls[0],
+            Some(&ticket.token),
+            Some(&inbox_prefix),
+        )
+        .await
+        {
+            Ok(client) => client,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "OAuth-authenticated NATS connection failed; retrying"
+                );
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        if let Err(error) = process_messages(
+            config.clone(),
+            nats,
+            ticket.request_subject,
+            Some(Duration::from_secs(renew_after)),
+        )
+        .await
+        {
+            warn!(?error, "OAuth NATS session ended; obtaining a new ticket");
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+}
+
+async fn process_messages(
+    config: ClientConfig,
+    nats: Client,
+    request_subject: String,
+    renew_after: Option<Duration>,
+) -> anyhow::Result<()> {
     let mut subscriber = nats
-        .subscribe(config.request_subject.clone())
+        .subscribe(request_subject.clone())
         .await
         .context("failed to subscribe to request subject")?;
 
     let state = AppState { config, nats };
     info!(
         client_id = %state.config.client_id,
-        request_subject = %state.config.request_subject,
+        request_subject = %request_subject,
         backend_rules = state.config.backend_rules.len(),
         "client listening for tunnel requests"
     );
 
-    while let Some(message) = subscriber.next().await {
-        let state = state.clone();
+    let handle = |message: Message, state: AppState| {
         tokio::spawn(async move {
             if let Err(error) = handle_request(message, state).await {
                 if is_expected_disconnect(&error) {
@@ -58,7 +141,28 @@ pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
                     warn!(?error, "client request handling failed");
                 }
             }
-        });
+        })
+    };
+
+    if let Some(duration) = renew_after {
+        let renewal = sleep(duration);
+        tokio::pin!(renewal);
+        loop {
+            tokio::select! {
+                _ = &mut renewal => {
+                    info!("renewing OAuth-backed NATS ticket");
+                    return Ok(());
+                }
+                message = subscriber.next() => match message {
+                    Some(message) => { handle(message, state.clone()); }
+                    None => return Err(anyhow!("NATS subscription ended before OAuth renewal")),
+                }
+            }
+        }
+    }
+
+    while let Some(message) = subscriber.next().await {
+        handle(message, state.clone());
     }
 
     Ok(())

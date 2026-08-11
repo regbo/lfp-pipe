@@ -102,9 +102,13 @@ Client-specific overrides are:
 
 Backend rules are structured and therefore remain TOML-only. Start from
 [`server.example.toml`](server.example.toml) and
-[`client.example.toml`](client.example.toml). Do not put real NATS credentials
-in tracked files; inject them at runtime or reference a protected deployment
-configuration.
+[`client.example.toml`](client.example.toml). For an unattended client, create
+an Authentik service principal in the management console and start from
+[`client.oauth.example.toml`](client.oauth.example.toml). The client exchanges
+the service-account app password for an Authentik access token, requests an
+exact-route NATS ticket from the control plane, and reconnects with a renewed
+ticket before expiration. Keep the one-time app password in a protected file;
+do not put real NATS or OAuth credentials in tracked configuration.
 
 ## Logging
 
@@ -157,7 +161,7 @@ do not put the token in this repository or on the command line.
 For an ephemeral pinned invocation, use:
 
 ```text
-mise exec github:regbo/lfp-pipe@0.1.0 -- lfp-pipe-server --version
+mise exec github:regbo/lfp-pipe@0.1.1 -- lfp-pipe-server --version
 ```
 
 Create the next tag from a clean worktree with:
