@@ -218,16 +218,32 @@ pub struct BackendRule {
     pub pattern: String,
     /// Socket address dialed by the client when this rule matches.
     pub backend_addr: String,
+    /// Optional destination for plaintext HTTP, including ACME HTTP-01 requests.
+    #[serde(default)]
+    pub http_backend_addr: Option<String>,
 }
 
 impl BackendRule {
     /// Resolve shorthand `:PORT` backend addresses to loopback.
     pub fn resolved_backend_addr(&self) -> String {
-        if self.backend_addr.starts_with(':') {
-            format!("127.0.0.1{}", self.backend_addr)
+        resolve_loopback_shorthand(&self.backend_addr)
+    }
+
+    /// Resolve the plaintext HTTP destination, falling back to the default backend.
+    pub fn resolved_http_backend_addr(&self) -> String {
+        if let Some(address) = self.http_backend_addr.as_deref() {
+            resolve_loopback_shorthand(address)
         } else {
-            self.backend_addr.clone()
+            self.resolved_backend_addr()
         }
+    }
+}
+
+fn resolve_loopback_shorthand(address: &str) -> String {
+    if address.starts_with(':') {
+        format!("127.0.0.1{address}")
+    } else {
+        address.to_string()
     }
 }
 
@@ -353,5 +369,10 @@ mod tests {
         let oauth = config.oauth.expect("OAuth configuration");
         assert_eq!(oauth.renew_before_seconds, 60);
         assert!(oauth.scopes.iter().any(|scope| scope == "entitlements"));
+        assert!(config.backend_rules[0].http_backend_addr.is_none());
+        assert_eq!(
+            config.backend_rules[0].resolved_http_backend_addr(),
+            config.backend_rules[0].resolved_backend_addr()
+        );
     }
 }

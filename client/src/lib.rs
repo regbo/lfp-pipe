@@ -11,6 +11,7 @@ use async_nats::{Client, Message};
 use futures::StreamExt;
 use shared::{
     config::{BackendRule, ClientConfig, RelayMode},
+    http::looks_like_http_prefix,
     io::copy_bidirectional_with_mode,
     logging::is_expected_disconnect,
     nats::{connect_nats, connect_nats_with_token},
@@ -202,12 +203,6 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
         return Ok(());
     }
 
-    debug!(
-        connection_id = %request.connection_id,
-        client_id = %state.config.client_id,
-        backend = %backend.backend_addr,
-        "claim accepted, opening tunnel"
-    );
     bridge_connection(
         &state.config.client_id,
         &request,
@@ -273,10 +268,6 @@ async fn bridge_connection(
     backend: &BackendRule,
     relay_mode: RelayMode,
 ) -> anyhow::Result<()> {
-    let backend_addr = backend.resolved_backend_addr();
-    let mut backend_stream = TcpStream::connect(&backend_addr)
-        .await
-        .with_context(|| format!("failed to connect backend {backend_addr}"))?;
     let mut server_stream = TcpStream::connect(&request.server_data_addr)
         .await
         .with_context(|| format!("failed to connect server {}", request.server_data_addr))?;
@@ -287,6 +278,18 @@ async fn bridge_connection(
         .await
         .context("failed to write prefix envelope")?;
 
+    let (backend_addr, plaintext_http) = select_protocol_backend(backend, &server_stream).await?;
+    debug!(
+        connection_id = %request.connection_id,
+        client_id,
+        backend = %backend_addr,
+        plaintext_http,
+        "claim accepted, opening tunnel"
+    );
+    let mut backend_stream = TcpStream::connect(&backend_addr)
+        .await
+        .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+
     let (to_server, to_backend) =
         copy_bidirectional_with_mode(&mut server_stream, &mut backend_stream, relay_mode)
             .await
@@ -295,18 +298,75 @@ async fn bridge_connection(
     Ok(())
 }
 
+async fn select_protocol_backend(
+    backend: &BackendRule,
+    server_stream: &TcpStream,
+) -> anyhow::Result<(String, bool)> {
+    if backend.http_backend_addr.is_none() {
+        return Ok((backend.resolved_backend_addr(), false));
+    }
+
+    // HTTP and TLS both send bytes before Caddy responds. Bound the peek so
+    // backend-first or raw protocols still fall back to the default endpoint.
+    let mut prefix = [0_u8; 24];
+    let plaintext_http =
+        match timeout(Duration::from_secs(2), server_stream.peek(&mut prefix)).await {
+            Ok(Ok(read)) => read > 0 && looks_like_http_prefix(&prefix[..read]),
+            Ok(Err(error)) => return Err(error).context("failed to inspect tunneled protocol"),
+            Err(_) => false,
+        };
+    let address = if plaintext_http {
+        backend.resolved_http_backend_addr()
+    } else {
+        backend.resolved_backend_addr()
+    };
+    Ok((address, plaintext_http))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use shared::{config::BackendRule, routing::select_backend};
+    use tokio::net::TcpListener;
 
     #[test]
     fn selects_matching_backend_rule() {
         let rules = vec![BackendRule {
             pattern: "*.example.com".to_string(),
             backend_addr: "127.0.0.1:443".to_string(),
+            http_backend_addr: Some("127.0.0.1:80".to_string()),
         }];
 
         let selected = select_backend(&rules, Some("api.example.com")).expect("match");
         assert_eq!(selected.backend_addr, "127.0.0.1:443");
+        assert_eq!(selected.resolved_http_backend_addr(), "127.0.0.1:80");
+    }
+
+    #[tokio::test]
+    async fn protocol_backend_is_opt_in_and_routes_plain_http() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let mut peer = TcpStream::connect(listener.local_addr()?).await?;
+        let (server_stream, _) = listener.accept().await?;
+        peer.write_all(b"GET / HTTP/1.1\r\n").await?;
+
+        let split = BackendRule {
+            pattern: "example.com".to_string(),
+            backend_addr: "127.0.0.1:443".to_string(),
+            http_backend_addr: Some("127.0.0.1:80".to_string()),
+        };
+        assert_eq!(
+            select_protocol_backend(&split, &server_stream).await?,
+            ("127.0.0.1:80".to_string(), true)
+        );
+
+        let unsplit = BackendRule {
+            http_backend_addr: None,
+            ..split
+        };
+        assert_eq!(
+            select_protocol_backend(&unsplit, &server_stream).await?,
+            ("127.0.0.1:443".to_string(), false)
+        );
+        Ok(())
     }
 }

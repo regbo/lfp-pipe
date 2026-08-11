@@ -77,10 +77,12 @@ mod tests {
             BackendRule {
                 pattern: "*.example.com".to_string(),
                 backend_addr: "127.0.0.1:8443".to_string(),
+                http_backend_addr: None,
             },
             BackendRule {
                 pattern: "other.example.com".to_string(),
                 backend_addr: "127.0.0.1:9443".to_string(),
+                http_backend_addr: None,
             },
         ];
 

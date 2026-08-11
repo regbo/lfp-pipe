@@ -142,11 +142,12 @@ renew_before_seconds = 60
 [[backend_rules]]
 pattern = "${hostname}"
 backend_addr = "127.0.0.1:443"
+http_backend_addr = "127.0.0.1:80"
 `;
     const notes = `LFP Connect Pipe client bundle
 
 1. Replace ${hostname} with the public route this client should claim.
-2. Replace 127.0.0.1:443 with the private backend address.
+2. Replace the private TLS/default and plaintext HTTP backend addresses as needed.
 3. Keep ${secretName} private and beside client.toml, or update client_secret_file.
 4. Run: lfp-pipe-client --config client.toml
 `;

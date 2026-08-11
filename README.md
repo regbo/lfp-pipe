@@ -110,6 +110,12 @@ exact-route NATS ticket from the control plane, and reconnects with a renewed
 ticket before expiration. Keep the one-time app password in a protected file;
 do not put real NATS or OAuth credentials in tracked configuration.
 
+Routes that terminate TLS locally can send plaintext HTTP to a separate
+listener without another tunnel. Set `backend_addr` to the TLS/default socket
+and `http_backend_addr` to Caddy's HTTP socket. The client peeks at the first
+tunneled bytes and sends HTTP requests—including `/.well-known/acme-challenge/`
+for ACME HTTP-01—to the HTTP backend while TLS remains on the default backend.
+
 ## Logging
 
 The default filter is `info,async_nats=warn`: startup and operational state are

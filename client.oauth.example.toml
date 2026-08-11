@@ -15,3 +15,4 @@ renew_before_seconds = 60
 [[backend_rules]]
 pattern = "speedtest.pipe.example.com"
 backend_addr = "127.0.0.1:443"
+http_backend_addr = "127.0.0.1:80"
