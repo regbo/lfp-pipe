@@ -1,0 +1,9 @@
+.git
+.github
+.idea
+.mise
+.vscode
+target
+controlplane/web/node_modules
+controlplane/web/dist
+*.log

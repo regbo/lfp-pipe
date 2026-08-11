@@ -4,7 +4,9 @@ data_listen = "0.0.0.0:7001"
 # Clients must be able to reach this callback address.
 advertised_data_addr = "127.0.0.1:7001"
 nats_url = "nats://127.0.0.1:4222"
+# nats_token_file = "/run/secrets/nats_server_token"
 relay_mode = "auto"
 request_subject = "tunnel.connect.request"
+domain_subject_routing = false
 claim_timeout_ms = 3000
 pending_timeout_ms = 10000

@@ -19,6 +19,7 @@ use shared::{
     nats::connect_nats,
     prefix::PrefixEnvelope,
     protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
+    routing::hostname_request_subject,
     tls::{extract_sni, validate_tls_record_header},
 };
 use tokio::{
@@ -46,7 +47,7 @@ struct PendingConnection {
 
 /// Accept public ingress and client callback sockets until either listener fails.
 pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
-    let nats = connect_nats(&config.nats_url)
+    let nats = connect_nats(&config.nats_url, config.nats_token_file.as_deref(), None)
         .await
         .context("failed to connect to NATS")?;
     let public_listener = TcpListener::bind(&config.public_listen)
@@ -68,6 +69,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         data_listen = %state.config.data_listen,
         advertised_data_addr = %state.config.server_data_addr(),
         request_subject = %state.config.request_subject,
+        domain_subject_routing = state.config.domain_subject_routing,
         "server listening"
     );
 
@@ -201,10 +203,20 @@ async fn broadcast_and_wait_for_claim(
         deadline_unix_ms: unix_time_ms() + state.config.claim_timeout_ms,
     };
 
+    let request_subject = if state.config.domain_subject_routing {
+        let hostname =
+            hostname.ok_or_else(|| anyhow!("hostname is required for domain subject routing"))?;
+        hostname_request_subject(&state.config.request_subject, hostname)
+            .ok_or_else(|| anyhow!("hostname cannot be represented as a NATS subject"))?
+    } else {
+        state.config.request_subject.clone()
+    };
+
     state
         .nats
-        .publish(
-            state.config.request_subject.clone(),
+        .publish_with_reply(
+            request_subject,
+            reply_subject,
             encode_json(&request)?.into(),
         )
         .await

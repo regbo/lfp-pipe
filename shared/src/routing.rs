@@ -2,6 +2,30 @@
 
 use crate::config::BackendRule;
 
+/// Build a hostname-specific subject by reversing its DNS labels.
+pub fn hostname_request_subject(prefix: &str, hostname: &str) -> Option<String> {
+    let hostname = hostname.trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = hostname.split('.').collect();
+    if labels.len() < 2
+        || labels.iter().any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return None;
+    }
+    Some(format!(
+        "{}.{}",
+        prefix.trim_end_matches('.'),
+        labels.into_iter().rev().collect::<Vec<_>>().join(".")
+    ))
+}
+
 /// Test an exact, wildcard, or default pattern against a detected hostname.
 pub fn matches_pattern(pattern: &str, hostname: Option<&str>) -> bool {
     if pattern.is_empty() {
@@ -33,7 +57,7 @@ pub fn select_backend<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{matches_pattern, select_backend};
+    use super::{hostname_request_subject, matches_pattern, select_backend};
     use crate::config::BackendRule;
 
     #[test]
@@ -68,5 +92,17 @@ mod tests {
     fn empty_pattern_matches_default_route_only() {
         assert!(matches_pattern("", None));
         assert!(!matches_pattern("", Some("example.com")));
+    }
+
+    #[test]
+    fn hostname_subject_reverses_dns_labels() {
+        assert_eq!(
+            hostname_request_subject("lfp.v1.connect", "Cool.Subdomain.Domain."),
+            Some("lfp.v1.connect.domain.subdomain.cool".to_string())
+        );
+        assert_eq!(
+            hostname_request_subject("lfp.v1.connect", "bad.*.test"),
+            None
+        );
     }
 }

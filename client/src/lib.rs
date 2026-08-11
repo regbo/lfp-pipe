@@ -27,9 +27,14 @@ struct AppState {
 
 /// Subscribe for matching requests and bridge accepted tunnels to backends.
 pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
-    let nats = connect_nats(&config.nats_url)
-        .await
-        .context("failed to connect to NATS")?;
+    let inbox_prefix = format!("_LFP_INBOX.{}", config.client_id);
+    let nats = connect_nats(
+        &config.nats_url,
+        config.nats_token_file.as_deref(),
+        Some(&inbox_prefix),
+    )
+    .await
+    .context("failed to connect to NATS")?;
     let mut subscriber = nats
         .subscribe(config.request_subject.clone())
         .await

@@ -1,0 +1,9 @@
+public_listen = "0.0.0.0:7443"
+data_listen = "0.0.0.0:7001"
+nats_url = "nats://nats:4222"
+nats_token_file = "/run/secrets/nats_internal_server_token"
+relay_mode = "auto"
+request_subject = "lfp.v1.connect"
+domain_subject_routing = true
+claim_timeout_ms = 3000
+pending_timeout_ms = 10000

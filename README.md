@@ -172,6 +172,8 @@ mise run version:bump major
 
 - [`deploy/swarm01/README.md`](deploy/swarm01/README.md) documents the public
   native systemd server.
+- [`deploy/swarm/README.md`](deploy/swarm/README.md) documents the Authentik,
+  NATS Auth Callout, web console, and Docker Swarm control plane.
 - [`deploy/unraid/README.md`](deploy/unraid/README.md) documents the native
   LFPConnect client/server supervisors and LibreSpeed backend.
 

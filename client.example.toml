@@ -1,5 +1,6 @@
 client_id = "client-a"
 nats_url = "nats://127.0.0.1:4222"
+# nats_token_file = "/run/secrets/lfp_route_token"
 relay_mode = "auto"
 request_subject = "tunnel.connect.request"
 claim_ack_timeout_ms = 1500

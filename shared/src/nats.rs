@@ -1,5 +1,7 @@
 //! NATS connection setup shared by the public server and private client.
 
+use std::fs;
+
 use anyhow::{Context, anyhow, ensure};
 use async_nats::{Client, ConnectOptions};
 use url::Url;
@@ -8,7 +10,11 @@ use url::Url;
 ///
 /// Discovery is intentionally disabled because callback coordination should not
 /// silently move to an address that is unreachable from one side of the tunnel.
-pub async fn connect_nats(nats_url: &str) -> anyhow::Result<Client> {
+pub async fn connect_nats(
+    nats_url: &str,
+    token_file: Option<&str>,
+    inbox_prefix: Option<&str>,
+) -> anyhow::Result<Client> {
     let parsed = Url::parse(nats_url).context("failed to parse NATS URL")?;
 
     ensure!(
@@ -30,7 +36,17 @@ pub async fn connect_nats(nats_url: &str) -> anyhow::Result<Client> {
         .retain_servers_order()
         .tls_first();
 
-    if !parsed.username().is_empty() || parsed.password().is_some() {
+    if let Some(prefix) = inbox_prefix {
+        options = options.custom_inbox_prefix(prefix);
+    }
+
+    if let Some(path) = token_file {
+        let token = fs::read_to_string(path)
+            .with_context(|| format!("failed to read NATS token file {path}"))?;
+        options = options.token(token.trim().to_string());
+    }
+
+    if token_file.is_none() && (!parsed.username().is_empty() || parsed.password().is_some()) {
         options = options.user_and_password(
             parsed.username().to_string(),
             parsed.password().unwrap_or_default().to_string(),

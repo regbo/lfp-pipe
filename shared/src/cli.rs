@@ -70,6 +70,10 @@ struct ServerCli {
     #[arg(long, env = "LFP_PIPE_NATS_URL", value_name = "URL")]
     nats_url: Option<String>,
 
+    /// File containing a NATS bearer token.
+    #[arg(long, env = "LFP_PIPE_NATS_TOKEN_FILE", value_name = "PATH")]
+    nats_token_file: Option<String>,
+
     /// Select automatic, splice, or buffered stream forwarding.
     #[arg(long, env = "LFP_PIPE_RELAY_MODE", value_enum)]
     relay_mode: Option<RelayMode>,
@@ -77,6 +81,10 @@ struct ServerCli {
     /// Override the NATS connection-request subject.
     #[arg(long, env = "LFP_PIPE_REQUEST_SUBJECT", value_name = "SUBJECT")]
     request_subject: Option<String>,
+
+    /// Publish requests on subjects suffixed with reversed hostname labels.
+    #[arg(long, env = "LFP_PIPE_DOMAIN_SUBJECT_ROUTING", value_name = "BOOL")]
+    domain_subject_routing: Option<bool>,
 
     /// Milliseconds to wait for the first matching client claim.
     #[arg(long, env = "LFP_PIPE_CLAIM_TIMEOUT_MS", value_name = "MS")]
@@ -94,8 +102,10 @@ impl ServerCli {
             data_listen: self.data_listen,
             advertised_data_addr: self.advertised_data_addr,
             nats_url: self.nats_url,
+            nats_token_file: self.nats_token_file,
             relay_mode: self.relay_mode,
             request_subject: self.request_subject,
+            domain_subject_routing: self.domain_subject_routing,
             claim_timeout_ms: self.claim_timeout_ms,
             pending_timeout_ms: self.pending_timeout_ms,
         });
@@ -125,6 +135,10 @@ struct ClientCli {
     #[arg(long, env = "LFP_PIPE_NATS_URL", value_name = "URL")]
     nats_url: Option<String>,
 
+    /// File containing a NATS bearer token.
+    #[arg(long, env = "LFP_PIPE_NATS_TOKEN_FILE", value_name = "PATH")]
+    nats_token_file: Option<String>,
+
     /// Select automatic, splice, or buffered stream forwarding.
     #[arg(long, env = "LFP_PIPE_RELAY_MODE", value_enum)]
     relay_mode: Option<RelayMode>,
@@ -143,6 +157,7 @@ impl ClientCli {
         let config = load_client_config(&self.common.config)?.with_overrides(ClientOverrides {
             client_id: self.client_id,
             nats_url: self.nats_url,
+            nats_token_file: self.nats_token_file,
             relay_mode: self.relay_mode,
             request_subject: self.request_subject,
             claim_ack_timeout_ms: self.claim_ack_timeout_ms,

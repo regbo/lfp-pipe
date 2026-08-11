@@ -11,6 +11,7 @@ the server or client crates.
 | `copy_bidirectional_with_mode` | `shared/src/io.rs` | Select splice or bounded buffered bidirectional TCP forwarding. | Server and client relays |
 | `init`, `is_expected_disconnect` | `shared/src/logging.rs` | Initialize low-noise tracing and classify normal peer teardown. | Binary entry points and relay loops |
 | `connect_nats` | `shared/src/nats.rs` | Establish a deterministic NATS control-plane connection. | Server and client startup |
+| `hostname_request_subject` | `shared/src/routing.rs` | Convert a validated hostname into a reversed-domain NATS subject. | Domain-scoped control plane |
 | `PrefixEnvelope` | `shared/src/prefix.rs` | Encode and validate the versioned callback-to-ingress binding prefix. | Client callback and public server |
 | `ConnectionRequest`, `ConnectionClaim`, `ConnectionClaimAck` | `shared/src/protocol.rs` | Define JSON messages exchanged over NATS. | Server and client control plane |
 | `matches_pattern`, `select_backend` | `shared/src/routing.rs` | Apply ordered exact, wildcard, and default backend rules. | Tunnel client |

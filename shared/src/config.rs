@@ -17,12 +17,18 @@ pub struct ServerConfig {
     pub advertised_data_addr: Option<String>,
     /// NATS URL used exclusively for control-plane messages.
     pub nats_url: String,
+    /// Optional file containing a NATS bearer token.
+    #[serde(default)]
+    pub nats_token_file: Option<String>,
     /// Stream-copy implementation used after a callback is paired.
     #[serde(default)]
     pub relay_mode: RelayMode,
     /// NATS subject on which connection requests are published.
     #[serde(default = "default_request_subject")]
     pub request_subject: String,
+    /// Append reversed hostname labels to the request subject.
+    #[serde(default)]
+    pub domain_subject_routing: bool,
     /// Maximum wait for at least one client claim.
     #[serde(default = "default_claim_timeout_ms")]
     pub claim_timeout_ms: u64,
@@ -42,10 +48,14 @@ pub struct ServerOverrides {
     pub advertised_data_addr: Option<String>,
     /// Override for [`ServerConfig::nats_url`].
     pub nats_url: Option<String>,
+    /// Override for [`ServerConfig::nats_token_file`].
+    pub nats_token_file: Option<String>,
     /// Override for [`ServerConfig::relay_mode`].
     pub relay_mode: Option<RelayMode>,
     /// Override for [`ServerConfig::request_subject`].
     pub request_subject: Option<String>,
+    /// Override for [`ServerConfig::domain_subject_routing`].
+    pub domain_subject_routing: Option<bool>,
     /// Override for [`ServerConfig::claim_timeout_ms`].
     pub claim_timeout_ms: Option<u64>,
     /// Override for [`ServerConfig::pending_timeout_ms`].
@@ -87,11 +97,17 @@ impl ServerConfig {
         if let Some(value) = overrides.nats_url {
             self.nats_url = value;
         }
+        if let Some(value) = overrides.nats_token_file {
+            self.nats_token_file = (!value.is_empty()).then_some(value);
+        }
         if let Some(value) = overrides.relay_mode {
             self.relay_mode = value;
         }
         if let Some(value) = overrides.request_subject {
             self.request_subject = value;
+        }
+        if let Some(value) = overrides.domain_subject_routing {
+            self.domain_subject_routing = value;
         }
         if let Some(value) = overrides.claim_timeout_ms {
             self.claim_timeout_ms = value;
@@ -110,6 +126,9 @@ pub struct ClientConfig {
     pub client_id: String,
     /// NATS URL used exclusively for control-plane messages.
     pub nats_url: String,
+    /// Optional file containing a NATS bearer token.
+    #[serde(default)]
+    pub nats_token_file: Option<String>,
     /// Stream-copy implementation used between callback and backend sockets.
     #[serde(default)]
     pub relay_mode: RelayMode,
@@ -130,6 +149,8 @@ pub struct ClientOverrides {
     pub client_id: Option<String>,
     /// Override for [`ClientConfig::nats_url`].
     pub nats_url: Option<String>,
+    /// Override for [`ClientConfig::nats_token_file`].
+    pub nats_token_file: Option<String>,
     /// Override for [`ClientConfig::relay_mode`].
     pub relay_mode: Option<RelayMode>,
     /// Override for [`ClientConfig::request_subject`].
@@ -146,6 +167,9 @@ impl ClientConfig {
         }
         if let Some(value) = overrides.nats_url {
             self.nats_url = value;
+        }
+        if let Some(value) = overrides.nats_token_file {
+            self.nats_token_file = (!value.is_empty()).then_some(value);
         }
         if let Some(value) = overrides.relay_mode {
             self.relay_mode = value;

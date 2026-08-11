@@ -1,0 +1,140 @@
+version: "3.9"
+
+services:
+  nats:
+    image: nats:2.12.1-alpine
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export NATS_CALLOUT_PASSWORD="$$(cat /run/secrets/nats_callout_password)"
+        export NATS_SYSTEM_PASSWORD="$$(cat /run/secrets/nats_system_password)"
+        exec nats-server --config /etc/nats/nats.conf
+    environment:
+      NATS_AUTH_ISSUER_PUBLIC_KEY: ${NATS_AUTH_ISSUER_PUBLIC_KEY:?set NATS_AUTH_ISSUER_PUBLIC_KEY}
+      NATS_AUTH_XKEY_PUBLIC_KEY: ${NATS_AUTH_XKEY_PUBLIC_KEY:?set NATS_AUTH_XKEY_PUBLIC_KEY}
+    configs:
+      - source: nats_config
+        target: /etc/nats/nats.conf
+    secrets:
+      - nats_callout_password
+      - nats_system_password
+    networks: [control]
+    ports:
+      - target: 4222
+        published: ${LFP_NATS_PORT:-4222}
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 3
+      placement:
+        max_replicas_per_node: 1
+      update_config:
+        order: start-first
+      restart_policy:
+        condition: on-failure
+
+  auth:
+    image: ${LFP_AUTH_IMAGE:-lfp-connect-auth:latest}
+    environment:
+      LFP_AUTH_HTTP_ADDR: :8080
+      LFP_AUTH_PUBLIC_URL: ${LFP_AUTH_PUBLIC_URL:?set LFP_AUTH_PUBLIC_URL}
+      LFP_AUTH_ROUTE_SUFFIX: ${LFP_ROUTE_SUFFIX:?set LFP_ROUTE_SUFFIX}
+      LFP_AUTH_OIDC_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:?set AUTHENTIK_ISSUER_URL}
+      LFP_AUTH_OIDC_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:?set AUTHENTIK_CLIENT_ID}
+      LFP_AUTH_OIDC_SCOPES: openid,profile,email,entitlements
+      LFP_AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/authentik_client_secret
+      LFP_AUTH_COOKIE_SECRET_FILE: /run/secrets/lfp_cookie_secret
+      LFP_AUTH_TICKET_SECRET_FILE: /run/secrets/lfp_ticket_secret
+      LFP_AUTH_NATS_URLS: nats://nats:4222
+      LFP_AUTH_NATS_PUBLIC_URLS: ${LFP_PUBLIC_NATS_URLS:-nats://nats.example.com:4222}
+      LFP_AUTH_NATS_CALLOUT_USER: auth-svc
+      LFP_AUTH_NATS_CALLOUT_PASSWORD_FILE: /run/secrets/nats_callout_password
+      LFP_AUTH_NATS_ISSUER_SEED_FILE: /run/secrets/nats_auth_issuer_seed
+      LFP_AUTH_NATS_XKEY_SEED_FILE: /run/secrets/nats_auth_xkey_seed
+      LFP_AUTH_NATS_INTERNAL_SERVER_TOKEN_FILE: /run/secrets/nats_internal_server_token
+      LFP_AUTH_NATS_TUNNEL_ACCOUNT: TUNNELS
+      LFP_AUTH_NATS_SUBJECT_PREFIX: lfp.v1.connect
+      LFP_AUTH_TICKET_TTL_MINUTES: ${LFP_TICKET_TTL_MINUTES:-15}
+    secrets:
+      - authentik_client_secret
+      - lfp_cookie_secret
+      - lfp_ticket_secret
+      - nats_callout_password
+      - nats_auth_issuer_seed
+      - nats_auth_xkey_seed
+      - nats_internal_server_token
+    networks: [control]
+    deploy:
+      replicas: 2
+      update_config:
+        order: start-first
+      restart_policy:
+        condition: on-failure
+
+  web:
+    image: ${LFP_WEB_IMAGE:-lfp-connect-web:latest}
+    networks: [control]
+    ports:
+      - target: 8080
+        published: ${LFP_CONTROL_PORT:-8080}
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 2
+      update_config:
+        order: start-first
+
+  lfp-server:
+    image: ${LFP_SERVER_IMAGE:-lfp-pipe-server:latest}
+    command: ["--config", "/etc/lfp-pipe/server.toml"]
+    environment:
+      LFP_PIPE_ADVERTISED_DATA_ADDR: ${LFP_ADVERTISED_DATA_ADDR:?set LFP_ADVERTISED_DATA_ADDR}
+    configs:
+      - source: lfp_server_config
+        target: /etc/lfp-pipe/server.toml
+    secrets:
+      - nats_internal_server_token
+    networks: [control]
+    ports:
+      - target: 7443
+        published: ${LFP_PUBLIC_PORT:-7443}
+        protocol: tcp
+        mode: ingress
+      - target: 7001
+        published: ${LFP_DATA_PORT:-7001}
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  control:
+    driver: overlay
+    attachable: true
+
+configs:
+  nats_config:
+    file: ./nats.conf
+  lfp_server_config:
+    file: ./lfp-server.toml
+
+secrets:
+  authentik_client_secret:
+    external: true
+  lfp_cookie_secret:
+    external: true
+  lfp_ticket_secret:
+    external: true
+  nats_callout_password:
+    external: true
+  nats_system_password:
+    external: true
+  nats_auth_issuer_seed:
+    external: true
+  nats_auth_xkey_seed:
+    external: true
+  nats_internal_server_token:
+    external: true
