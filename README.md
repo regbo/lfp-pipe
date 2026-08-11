@@ -125,6 +125,59 @@ route fails, the process exits so a service supervisor can restart the whole
 declared set instead of silently leaving only some hostnames available. The
 original flat single-route format remains supported without changes.
 
+### Protect an HTTP backend with OAuth JWTs
+
+Use [`client.ollama.example.toml`](client.ollama.example.toml) to expose a local
+Ollama listener while requiring a bearer access token. The client acts as an
+OAuth resource server: it does not run an interactive login redirect. It
+validates the token signature, exact `iss`, at least one configured `aud`,
+`exp`, optional `nbf`, and the configured roles before connecting to Ollama.
+Invalid or missing credentials receive `401`; a valid token without the
+required role receives `403`.
+
+The configuration keeps three trust boundaries separate:
+
+- `[oauth]` obtains route-scoped NATS credentials for the tunnel client.
+- `[acme]` terminates public HTTPS locally.
+- `[authorization]` authenticates each HTTP connection before backend access.
+
+Protected and path-routed hostnames require ACME. This prevents an encrypted
+TLS path from bypassing HTTP routing or JWT inspection. Add one or more
+`[[routes.path_routes]]` entries to send a segment-boundary prefix to another
+backend under the same certificate. `strip_path_prefix = true` turns a public
+request such as `/ollama/api/tags` into `/api/tags` for Ollama. The most-specific
+matching prefix wins and the hostname's ordinary `backend_addr` is the fallback.
+
+Only HTTP/1.1 is advertised on the locally terminated TLS connection. A path
+route can have its own `[routes.path_routes.authorization]` policy, leaving the
+rest of the hostname available for a browser-oriented Authentik forward-auth
+proxy. The bearer header is removed before forwarding by default; set
+`forward_authorization = true` only when the private backend must receive it.
+
+`issuer` is also the OIDC discovery base, so `jwks_uri` is normally omitted.
+For an Authentik per-provider issuer, use the exact trailing-slash issuer shown
+in its discovery document. Set `jwks_uri` explicitly if discovery is not
+available. Successfully fetched keys are persisted to `jwks_cache_file`; when
+Authentik or its JWKS endpoint is temporarily unavailable, the client uses that
+file for up to `jwks_max_stale_seconds`. Set the value to `0` only for a
+deliberately static, manually managed key set with no staleness limit.
+
+Authentik must put the expected audience and role/group claim into the access
+token. For example, configure a `groups` scope/property mapping and require
+`ollama-users`. Role claim paths may be nested, such as
+`roles_claim = "realm_access.roles"`, and `role_match` may be `any` or `all`.
+Issuer wildcards are intentionally unsupported because verification keys must
+remain bound to one exact issuer. The implementation follows the JWT best
+practice requirements to verify algorithms, issuer, and audience described by
+[RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html).
+
+Example request after obtaining an Authentik access token:
+
+```sh
+curl https://services.pipe.example.com/ollama/api/tags \
+  -H "Authorization: Bearer $OLLAMA_ACCESS_TOKEN"
+```
+
 ### Automatic certificates
 
 Routes can terminate TLS inside `lfp-pipe-client` without Caddy or another

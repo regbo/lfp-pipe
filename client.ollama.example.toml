@@ -1,0 +1,45 @@
+# A protected route has three independent concerns: tunnel credential
+# acquisition, TLS termination, and caller authorization.
+[defaults]
+nats_url = "tls://nats-pipe.example.com:443"
+relay_mode = "auto"
+backend_addr = "127.0.0.1:8080"
+
+# Machine credentials used only to obtain the route-scoped NATS ticket.
+[defaults.oauth]
+token_url = "https://auth.example.com/application/o/token/"
+provider_client_id = "lfp-pipe"
+username = "lfp-pipe-ollama-ab12cd34"
+client_secret_file = "/run/secrets/lfp_pipe_client_secret"
+control_plane_url = "https://manage-pipe.example.com"
+
+# Required for authorization: HTTPS must be terminated here so the client can
+# validate the HTTP Authorization header before opening the Ollama backend.
+[defaults.acme]
+contacts = ["mailto:admin@example.com"]
+cache_dir = "/var/lib/lfp-pipe/acme"
+production = false
+
+[[routes]]
+client_id = "local-services"
+hostname = "services.pipe.example.com"
+
+[[routes.path_routes]]
+path_prefix = "/ollama"
+strip_path_prefix = true
+backend_addr = "127.0.0.1:11434"
+
+# OAuth access tokens presented by callers are validated as JWTs. Issuer and
+# audience comparisons are exact; they are deliberately not wildcard patterns.
+[routes.path_routes.authorization]
+issuer = "https://auth.example.com/application/o/ollama/"
+audiences = ["ollama"]
+# jwks_uri = "https://auth.example.com/application/o/ollama/jwks/"
+jwks_cache_file = "/var/lib/lfp-pipe/auth/ollama-jwks.json"
+roles_claim = "groups"
+required_roles = ["ollama-users"]
+role_match = "any"
+algorithms = ["RS256"]
+jwks_refresh_seconds = 3600
+jwks_max_stale_seconds = 604800
+forward_authorization = false

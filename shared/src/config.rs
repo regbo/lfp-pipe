@@ -174,6 +174,9 @@ pub struct ClientConfig {
     /// Optional automatic certificate acquisition and local TLS termination.
     #[serde(default)]
     pub acme: Option<ClientAcmeConfig>,
+    /// Optional JWT policy enforced before any HTTP request reaches a backend.
+    #[serde(default)]
+    pub authorization: Option<ClientAuthorizationConfig>,
     /// Stream-copy implementation used between callback and backend sockets.
     #[serde(default)]
     pub relay_mode: RelayMode,
@@ -185,6 +188,65 @@ pub struct ClientConfig {
     pub claim_ack_timeout_ms: u64,
     /// Ordered hostname-to-backend routing rules.
     pub backend_rules: Vec<BackendRule>,
+}
+
+/// JWT resource-server policy protecting a private HTTP backend.
+///
+/// Issuer and audience matching are exact by design. Wildcard issuer matching
+/// would allow tokens from a different tenant or Authentik provider to cross
+/// an authorization boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientAuthorizationConfig {
+    /// Exact JWT `iss` claim and OIDC issuer used for discovery.
+    pub issuer: String,
+    /// One or more accepted JWT `aud` values.
+    pub audiences: Vec<String>,
+    /// Explicit JWKS endpoint; omitted to use OIDC discovery from `issuer`.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// Persistent JWKS cache used when discovery or Authentik is unavailable.
+    pub jwks_cache_file: String,
+    /// Dot-separated claim path containing a string or array of role names.
+    #[serde(default = "default_roles_claim")]
+    pub roles_claim: String,
+    /// Roles required in the configured claim. Empty means signature/claims only.
+    #[serde(default)]
+    pub required_roles: Vec<String>,
+    /// Forward the caller's bearer token to the private backend.
+    #[serde(default)]
+    pub forward_authorization: bool,
+    /// Whether any or all configured roles must be present.
+    #[serde(default)]
+    pub role_match: RoleMatch,
+    /// Explicit asymmetric JWS algorithm allowlist.
+    #[serde(default = "default_jwt_algorithms")]
+    pub algorithms: Vec<String>,
+    /// Allowed clock skew for `exp` and `nbf` validation.
+    #[serde(default = "default_jwt_leeway_seconds")]
+    pub leeway_seconds: u64,
+    /// Refresh remotely obtained JWKS after this interval.
+    #[serde(default = "default_jwks_refresh_seconds")]
+    pub jwks_refresh_seconds: u64,
+    /// Maximum age of a cached JWKS when the identity provider is unavailable.
+    #[serde(default = "default_jwks_max_stale_seconds")]
+    pub jwks_max_stale_seconds: u64,
+    /// Maximum time to wait for the first complete HTTP header block.
+    #[serde(default = "default_auth_header_timeout_ms")]
+    pub header_timeout_ms: u64,
+    /// Maximum accepted HTTP request-header size.
+    #[serde(default = "default_auth_max_header_bytes")]
+    pub max_header_bytes: usize,
+}
+
+/// Required-role matching semantics.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RoleMatch {
+    /// At least one configured role must be present.
+    #[default]
+    Any,
+    /// Every configured role must be present.
+    All,
 }
 
 /// Authentik machine credential and control-plane exchange configuration.
@@ -268,6 +330,9 @@ pub struct ClientConfigDefaults {
     /// Default automatic certificate settings shared by route sessions.
     #[serde(default)]
     pub acme: Option<ClientAcmeDefaults>,
+    /// Default JWT authorization settings shared by protected routes.
+    #[serde(default)]
+    pub authorization: Option<ClientAuthorizationDefaults>,
     /// Default stream-copy implementation.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -283,6 +348,56 @@ pub struct ClientConfigDefaults {
     /// Default private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
+}
+
+/// Inheritable JWT authorization settings for multi-route client files.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ClientAuthorizationDefaults {
+    /// Whether this route inherits or enables authorization.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Exact JWT issuer.
+    #[serde(default)]
+    pub issuer: Option<String>,
+    /// Accepted JWT audiences.
+    #[serde(default)]
+    pub audiences: Option<Vec<String>>,
+    /// Optional explicit JWKS endpoint.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// Persistent JWKS cache file.
+    #[serde(default)]
+    pub jwks_cache_file: Option<String>,
+    /// Dot-separated role claim path.
+    #[serde(default)]
+    pub roles_claim: Option<String>,
+    /// Required role names.
+    #[serde(default)]
+    pub required_roles: Option<Vec<String>>,
+    /// Whether to forward the caller's bearer token to the private backend.
+    #[serde(default)]
+    pub forward_authorization: Option<bool>,
+    /// Any/all matching mode.
+    #[serde(default)]
+    pub role_match: Option<RoleMatch>,
+    /// Explicit asymmetric JWS algorithm allowlist.
+    #[serde(default)]
+    pub algorithms: Option<Vec<String>>,
+    /// JWT clock-skew allowance.
+    #[serde(default)]
+    pub leeway_seconds: Option<u64>,
+    /// Remote JWKS refresh interval.
+    #[serde(default)]
+    pub jwks_refresh_seconds: Option<u64>,
+    /// Maximum acceptable fallback-cache age.
+    #[serde(default)]
+    pub jwks_max_stale_seconds: Option<u64>,
+    /// HTTP header read timeout.
+    #[serde(default)]
+    pub header_timeout_ms: Option<u64>,
+    /// Maximum HTTP request-header size.
+    #[serde(default)]
+    pub max_header_bytes: Option<usize>,
 }
 
 /// Inheritable Authentik settings for multi-route client files.
@@ -341,9 +456,10 @@ pub struct ClientAcmeDefaults {
 
 /// One independently authenticated hostname in a multi-route client file.
 ///
-/// Each entry expands into a normal [`ClientConfig`] with exactly one
-/// [`BackendRule`]. Consequently OAuth acquisition, NATS subscription, ticket
-/// renewal, and failures are isolated per hostname while sharing one process.
+/// Each entry expands into a normal [`ClientConfig`] with one hostname and an
+/// optional ordered set of path-specific backend rules. Consequently OAuth
+/// acquisition, NATS subscription, ticket renewal, and failures are isolated
+/// per hostname while sharing one process.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClientRouteConfig {
     /// Stable identifier included in claims and callback prefixes.
@@ -365,6 +481,9 @@ pub struct ClientRouteConfig {
     /// Route-specific ACME settings layered over shared ACME defaults.
     #[serde(default)]
     pub acme: Option<ClientAcmeDefaults>,
+    /// Route-specific JWT policy layered over shared authorization defaults.
+    #[serde(default)]
+    pub authorization: Option<ClientAuthorizationDefaults>,
     /// Route-specific stream-copy implementation override.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -380,6 +499,24 @@ pub struct ClientRouteConfig {
     /// Route-specific private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
+    /// More-specific HTTP path backends served by this hostname/certificate.
+    #[serde(default)]
+    pub path_routes: Vec<ClientPathRouteConfig>,
+}
+
+/// One path-specific backend nested beneath a multi-route hostname.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientPathRouteConfig {
+    /// URL path prefix, matched on a segment boundary.
+    pub path_prefix: String,
+    /// Private destination for requests under this prefix.
+    pub backend_addr: String,
+    /// Remove the prefix before forwarding to the backend.
+    #[serde(default)]
+    pub strip_path_prefix: bool,
+    /// Optional JWT policy for only this path backend.
+    #[serde(default)]
+    pub authorization: Option<ClientAuthorizationDefaults>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,11 +564,20 @@ pub struct BackendRule {
     /// Exact host, `*.suffix` wildcard, or empty string for non-HTTP/TLS traffic.
     #[serde(default)]
     pub pattern: String,
+    /// Optional HTTP URL path prefix, matched on a segment boundary.
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+    /// Remove [`Self::path_prefix`] before forwarding the HTTP request.
+    #[serde(default)]
+    pub strip_path_prefix: bool,
     /// Socket address dialed by the client when this rule matches.
     pub backend_addr: String,
     /// Optional destination for plaintext HTTP, including ACME HTTP-01 requests.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
+    /// Optional JWT policy applied only when this backend rule is selected.
+    #[serde(default)]
+    pub authorization: Option<ClientAuthorizationConfig>,
 }
 
 impl BackendRule {
@@ -487,6 +633,34 @@ fn default_oauth_renew_before_seconds() -> u64 {
     60
 }
 
+fn default_roles_claim() -> String {
+    "groups".to_string()
+}
+
+fn default_jwt_algorithms() -> Vec<String> {
+    vec!["RS256".to_string()]
+}
+
+fn default_jwt_leeway_seconds() -> u64 {
+    30
+}
+
+fn default_jwks_refresh_seconds() -> u64 {
+    3_600
+}
+
+fn default_jwks_max_stale_seconds() -> u64 {
+    604_800
+}
+
+fn default_auth_header_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_auth_max_header_bytes() -> usize {
+    32 * 1024
+}
+
 /// Load server TOML without applying CLI or environment overrides.
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = fs::read_to_string(path)
@@ -527,12 +701,89 @@ pub fn load_client_configs(path: &Path) -> anyhow::Result<Vec<ClientConfig>> {
 
 fn parse_client_configs(raw: &str) -> anyhow::Result<Vec<ClientConfig>> {
     let document: ClientConfigDocument = toml::from_str(raw)?;
-    match document {
-        ClientConfigDocument::Legacy(config) => Ok(vec![config]),
+    let configs = match document {
+        ClientConfigDocument::Legacy(config) => vec![config],
         ClientConfigDocument::MultiRoute(config) => {
-            expand_client_routes(config).context("invalid multi-route client config")
+            expand_client_routes(config).context("invalid multi-route client config")?
+        }
+    };
+    for config in &configs {
+        validate_client_config(config)?;
+    }
+    Ok(configs)
+}
+
+fn validate_client_config(config: &ClientConfig) -> anyhow::Result<()> {
+    let has_path_routes = config
+        .backend_rules
+        .iter()
+        .any(|rule| rule.path_prefix.is_some());
+    let has_authorization = config.authorization.is_some()
+        || config
+            .backend_rules
+            .iter()
+            .any(|rule| rule.authorization.is_some());
+    anyhow::ensure!(
+        (!has_path_routes && !has_authorization) || config.acme.is_some(),
+        "path routing and authorization require [acme] so HTTPS can be inspected"
+    );
+    let fallback_count = config
+        .backend_rules
+        .iter()
+        .filter(|rule| rule.path_prefix.is_none())
+        .count();
+    anyhow::ensure!(
+        !has_path_routes || fallback_count == 1,
+        "path routing requires exactly one fallback backend without path_prefix"
+    );
+    let mut prefixes = HashSet::new();
+    for rule in &config.backend_rules {
+        if let Some(prefix) = &rule.path_prefix {
+            anyhow::ensure!(
+                prefix.starts_with('/') && !prefix.contains(['?', '#']),
+                "backend path_prefix must start with '/' and omit query/fragment"
+            );
+            anyhow::ensure!(
+                prefixes.insert(prefix),
+                "backend path_prefix {prefix} is duplicated"
+            );
+        }
+        if let Some(authorization) = &rule.authorization {
+            validate_authorization(authorization)?;
         }
     }
+    if let Some(authorization) = &config.authorization {
+        validate_authorization(authorization)?;
+    }
+    Ok(())
+}
+
+fn validate_authorization(authorization: &ClientAuthorizationConfig) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !authorization.issuer.trim().is_empty(),
+        "authorization.issuer cannot be empty"
+    );
+    anyhow::ensure!(
+        !authorization.audiences.is_empty(),
+        "authorization.audiences cannot be empty"
+    );
+    anyhow::ensure!(
+        !authorization.jwks_cache_file.trim().is_empty(),
+        "authorization.jwks_cache_file cannot be empty"
+    );
+    anyhow::ensure!(
+        !authorization.algorithms.is_empty(),
+        "authorization.algorithms cannot be empty"
+    );
+    anyhow::ensure!(
+        authorization.header_timeout_ms > 0,
+        "authorization.header_timeout_ms must be positive"
+    );
+    anyhow::ensure!(
+        authorization.max_header_bytes >= 1024,
+        "authorization.max_header_bytes must be at least 1024"
+    );
+    Ok(())
 }
 
 fn expand_client_routes(document: MultiRouteClientConfig) -> anyhow::Result<Vec<ClientConfig>> {
@@ -584,6 +835,38 @@ fn expand_client_route(
         &route.hostname,
     )?;
     let acme = merge_acme_defaults(defaults.acme.as_ref(), route.acme.as_ref(), &route.hostname)?;
+    let authorization = merge_authorization_defaults(
+        defaults.authorization.as_ref(),
+        route.authorization.as_ref(),
+    )?;
+    let pattern = route.pattern.unwrap_or_else(|| route.hostname.clone());
+    let mut backend_rules = vec![BackendRule {
+        pattern: pattern.clone(),
+        path_prefix: None,
+        strip_path_prefix: false,
+        backend_addr,
+        http_backend_addr: route
+            .http_backend_addr
+            .or_else(|| defaults.http_backend_addr.clone()),
+        authorization: None,
+    }];
+    for path_route in route.path_routes {
+        let path_authorization = merge_authorization_defaults(
+            route
+                .authorization
+                .as_ref()
+                .or(defaults.authorization.as_ref()),
+            path_route.authorization.as_ref(),
+        )?;
+        backend_rules.push(BackendRule {
+            pattern: pattern.clone(),
+            path_prefix: Some(path_route.path_prefix),
+            strip_path_prefix: path_route.strip_path_prefix,
+            backend_addr: path_route.backend_addr,
+            http_backend_addr: None,
+            authorization: path_authorization,
+        });
+    }
 
     Ok(ClientConfig {
         client_id: route.client_id,
@@ -593,6 +876,7 @@ fn expand_client_route(
             .or_else(|| defaults.nats_token_file.clone()),
         oauth,
         acme,
+        authorization,
         relay_mode: route.relay_mode.or(defaults.relay_mode).unwrap_or_default(),
         request_subject: route
             .request_subject
@@ -602,14 +886,83 @@ fn expand_client_route(
             .claim_ack_timeout_ms
             .or(defaults.claim_ack_timeout_ms)
             .unwrap_or_else(default_claim_ack_timeout_ms),
-        backend_rules: vec![BackendRule {
-            pattern: route.pattern.unwrap_or(route.hostname),
-            backend_addr,
-            http_backend_addr: route
-                .http_backend_addr
-                .or_else(|| defaults.http_backend_addr.clone()),
-        }],
+        backend_rules,
     })
+}
+
+fn merge_authorization_defaults(
+    defaults: Option<&ClientAuthorizationDefaults>,
+    route: Option<&ClientAuthorizationDefaults>,
+) -> anyhow::Result<Option<ClientAuthorizationConfig>> {
+    if defaults.is_none() && route.is_none() {
+        return Ok(None);
+    }
+    let enabled = route
+        .and_then(|settings| settings.enabled)
+        .or_else(|| defaults.and_then(|settings| settings.enabled))
+        .unwrap_or(true);
+    if !enabled {
+        return Ok(None);
+    }
+    let string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>, name: &str| {
+        route
+            .and_then(|settings| select(settings).clone())
+            .or_else(|| defaults.and_then(|settings| select(settings).clone()))
+            .with_context(|| {
+                format!("authorization.{name} is required in the route or [defaults.authorization]")
+            })
+    };
+    let list_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<Vec<String>>| {
+        route
+            .and_then(|settings| select(settings).clone())
+            .or_else(|| defaults.and_then(|settings| select(settings).clone()))
+    };
+
+    Ok(Some(ClientAuthorizationConfig {
+        issuer: string_value(|settings| &settings.issuer, "issuer")?,
+        audiences: list_value(|settings| &settings.audiences).context(
+            "authorization.audiences is required in the route or [defaults.authorization]",
+        )?,
+        jwks_uri: route
+            .and_then(|settings| settings.jwks_uri.clone())
+            .or_else(|| defaults.and_then(|settings| settings.jwks_uri.clone())),
+        jwks_cache_file: string_value(|settings| &settings.jwks_cache_file, "jwks_cache_file")?,
+        roles_claim: route
+            .and_then(|settings| settings.roles_claim.clone())
+            .or_else(|| defaults.and_then(|settings| settings.roles_claim.clone()))
+            .unwrap_or_else(default_roles_claim),
+        required_roles: list_value(|settings| &settings.required_roles).unwrap_or_default(),
+        forward_authorization: route
+            .and_then(|settings| settings.forward_authorization)
+            .or_else(|| defaults.and_then(|settings| settings.forward_authorization))
+            .unwrap_or(false),
+        role_match: route
+            .and_then(|settings| settings.role_match)
+            .or_else(|| defaults.and_then(|settings| settings.role_match))
+            .unwrap_or_default(),
+        algorithms: list_value(|settings| &settings.algorithms)
+            .unwrap_or_else(default_jwt_algorithms),
+        leeway_seconds: route
+            .and_then(|settings| settings.leeway_seconds)
+            .or_else(|| defaults.and_then(|settings| settings.leeway_seconds))
+            .unwrap_or_else(default_jwt_leeway_seconds),
+        jwks_refresh_seconds: route
+            .and_then(|settings| settings.jwks_refresh_seconds)
+            .or_else(|| defaults.and_then(|settings| settings.jwks_refresh_seconds))
+            .unwrap_or_else(default_jwks_refresh_seconds),
+        jwks_max_stale_seconds: route
+            .and_then(|settings| settings.jwks_max_stale_seconds)
+            .or_else(|| defaults.and_then(|settings| settings.jwks_max_stale_seconds))
+            .unwrap_or_else(default_jwks_max_stale_seconds),
+        header_timeout_ms: route
+            .and_then(|settings| settings.header_timeout_ms)
+            .or_else(|| defaults.and_then(|settings| settings.header_timeout_ms))
+            .unwrap_or_else(default_auth_header_timeout_ms),
+        max_header_bytes: route
+            .and_then(|settings| settings.max_header_bytes)
+            .or_else(|| defaults.and_then(|settings| settings.max_header_bytes))
+            .unwrap_or_else(default_auth_max_header_bytes),
+    }))
 }
 
 fn merge_acme_defaults(
@@ -918,6 +1271,73 @@ mod tests {
         assert_eq!(configs[1].client_id, "desktop-admin");
         assert!(!configs[0].acme.as_ref().expect("first ACME").production);
         assert!(configs[1].acme.as_ref().expect("second ACME").production);
+    }
+
+    #[test]
+    fn checked_in_ollama_example_has_normalized_authorization() {
+        let configs = parse_client_configs(include_str!("../../client.ollama.example.toml"))
+            .expect("checked-in Ollama example");
+        let config = &configs[0];
+        let ollama = &config.backend_rules[1];
+        let authorization = ollama.authorization.as_ref().expect("authorization");
+        assert_eq!(ollama.resolved_backend_addr(), "127.0.0.1:11434");
+        assert_eq!(ollama.path_prefix.as_deref(), Some("/ollama"));
+        assert!(ollama.strip_path_prefix);
+        assert_eq!(authorization.audiences, ["ollama"]);
+        assert_eq!(authorization.roles_claim, "groups");
+        assert_eq!(authorization.required_roles, ["ollama-users"]);
+        assert!(!authorization.forward_authorization);
+        assert!(config.acme.is_some());
+        assert!(config.oauth.is_some());
+    }
+
+    #[test]
+    fn authorization_requires_local_tls_termination() {
+        let error = parse_client_configs(
+            r#"
+                client_id = "unsafe"
+                nats_url = "nats://localhost:4222"
+
+                [authorization]
+                issuer = "https://auth.example/application/o/api/"
+                audiences = ["api"]
+                jwks_cache_file = "/var/cache/api-jwks.json"
+
+                [[backend_rules]]
+                pattern = "api.example.com"
+                backend_addr = ":11434"
+            "#,
+        )
+        .expect_err("authorization without TLS termination must fail");
+        assert!(
+            format!("{error:#}").contains("require [acme]"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn route_can_disable_inherited_authorization() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.authorization]
+                issuer = "https://auth.example/application/o/api/"
+                audiences = ["api"]
+                jwks_cache_file = "/var/cache/api-jwks.json"
+
+                [[routes]]
+                client_id = "public"
+                hostname = "public.example.com"
+
+                [routes.authorization]
+                enabled = false
+            "#,
+        )
+        .expect("authorization opt-out");
+        assert!(configs[0].authorization.is_none());
     }
 
     #[test]

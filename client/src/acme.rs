@@ -8,22 +8,25 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, anyhow};
 use futures::StreamExt;
 use rustls_acme::{AcmeConfig, caches::DirCache};
 use shared::{
-    config::{BackendRule, ClientAcmeConfig, RelayMode},
+    config::{ClientAcmeConfig, RelayMode},
     io::copy_bidirectional_buffered,
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
     sync::mpsc,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, warn};
+
+use crate::{BackendRuntime, authorization, request_limits, select_runtime_for_path};
 
 /// Cloneable ingress handle owned by request-processing tasks.
 #[derive(Clone)]
@@ -32,10 +35,10 @@ pub(crate) struct AcmeRuntime {
 }
 
 impl AcmeRuntime {
-    /// Start certificate management for one exact hostname and backend.
+    /// Start certificate management for one exact hostname and its path backends.
     pub(crate) fn start(
         config: ClientAcmeConfig,
-        backend: BackendRule,
+        backends: Arc<Vec<BackendRuntime>>,
         relay_mode: RelayMode,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
@@ -46,7 +49,7 @@ impl AcmeRuntime {
         prepare_cache_dir(&cache_dir)?;
         let (sender, receiver) = mpsc::channel(64);
         tokio::spawn(async move {
-            if let Err(error) = run_acme(config, cache_dir, backend, receiver).await {
+            if let Err(error) = run_acme(config, cache_dir, backends, receiver).await {
                 warn!(?error, "ACME TLS runtime stopped");
             }
         });
@@ -65,7 +68,7 @@ impl AcmeRuntime {
 async fn run_acme(
     config: ClientAcmeConfig,
     cache_dir: PathBuf,
-    backend: BackendRule,
+    backends: Arc<Vec<BackendRuntime>>,
     receiver: mpsc::Receiver<TcpStream>,
 ) -> anyhow::Result<()> {
     let mut acme = AcmeConfig::new([&config.domain]).contact(config.contacts.iter());
@@ -89,10 +92,11 @@ async fn run_acme(
     while let Some(connection) = tls_incoming.next().await {
         match connection {
             Ok(tls_stream) => {
-                let backend_addr = backend.resolved_backend_addr();
+                let backends = backends.clone();
+                let domain = config.domain.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = bridge_tls(tls_stream, &backend_addr).await {
-                        warn!(?error, backend = %backend_addr, "ACME TLS relay failed");
+                    if let Err(error) = bridge_tls(tls_stream, &domain, &backends).await {
+                        warn!(?error, domain = %domain, "ACME TLS relay failed");
                     }
                 });
             }
@@ -103,13 +107,46 @@ async fn run_acme(
     Ok(())
 }
 
-async fn bridge_tls<T>(mut tls_stream: T, backend_addr: &str) -> anyhow::Result<()>
+async fn bridge_tls<T>(
+    mut tls_stream: T,
+    hostname: &str,
+    backends: &[BackendRuntime],
+) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let mut backend_stream = TcpStream::connect(backend_addr)
+    let (maximum, header_timeout) = request_limits(backends);
+    let request =
+        authorization::read_request_header(&mut tls_stream, maximum, header_timeout).await?;
+    let path = authorization::request_path(&request)?;
+    let backend = select_runtime_for_path(backends, Some(hostname), path)
+        .context("HTTP request has no matching backend")?;
+    let mut request = match &backend.authorization {
+        Some(authorizer) => {
+            authorizer
+                .authorize_request(&mut tls_stream, request)
+                .await?
+        }
+        None => request,
+    };
+    if backend.rule.strip_path_prefix {
+        request = authorization::strip_request_path_prefix(
+            request,
+            backend
+                .rule
+                .path_prefix
+                .as_deref()
+                .context("missing path_prefix")?,
+        )?;
+    }
+    let backend_addr = backend.rule.resolved_backend_addr();
+    let mut backend_stream = TcpStream::connect(&backend_addr)
         .await
         .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+    backend_stream
+        .write_all(&request)
+        .await
+        .context("forward routed HTTP request headers")?;
     let (to_client, to_backend) = copy_bidirectional_buffered(&mut tls_stream, &mut backend_stream)
         .await
         .context("ACME TLS copy_bidirectional failed")?;
@@ -154,6 +191,7 @@ mod tests {
     use super::{AcmeRuntime, domain_cache_dir};
     use shared::config::{BackendRule, ClientAcmeConfig, RelayMode};
     use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn domain_cache_directory_cannot_escape_root() {
@@ -171,11 +209,17 @@ mod tests {
                 production: false,
                 directory_url: None,
             },
-            BackendRule {
-                pattern: "example.com".to_string(),
-                backend_addr: ":8080".to_string(),
-                http_backend_addr: None,
-            },
+            Arc::new(vec![crate::BackendRuntime {
+                rule: BackendRule {
+                    pattern: "example.com".to_string(),
+                    path_prefix: None,
+                    strip_path_prefix: false,
+                    backend_addr: ":8080".to_string(),
+                    http_backend_addr: None,
+                    authorization: None,
+                },
+                authorization: None,
+            }]),
             RelayMode::Splice,
         )
         .err()

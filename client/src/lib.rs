@@ -3,22 +3,26 @@
 #![warn(missing_docs)]
 
 mod acme;
+mod authorization;
 mod oauth;
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, anyhow};
 use async_nats::{Client, Message};
 use futures::StreamExt;
 use shared::{
-    config::{BackendRule, ClientConfig, RelayMode},
+    config::{BackendRule, ClientAuthorizationConfig, ClientConfig, RelayMode},
     http::looks_like_http_prefix,
     io::copy_bidirectional_with_mode,
     logging::is_expected_disconnect,
     nats::{connect_nats, connect_nats_with_token},
     prefix::PrefixEnvelope,
     protocol::{ConnectionClaim, ConnectionClaimAck, ConnectionRequest, decode_json, encode_json},
-    routing::select_backend,
+    routing::{matches_path_prefix, matches_pattern},
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -33,6 +37,55 @@ struct AppState {
     config: ClientConfig,
     nats: Client,
     acme: Option<acme::AcmeRuntime>,
+    backends: Arc<Vec<BackendRuntime>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BackendRuntime {
+    rule: BackendRule,
+    authorization: Option<authorization::JwtAuthorizer>,
+}
+
+impl BackendRuntime {
+    fn matches_hostname(&self, hostname: Option<&str>) -> bool {
+        matches_pattern(&self.rule.pattern, hostname)
+    }
+}
+
+pub(crate) fn request_limits(backends: &[BackendRuntime]) -> (usize, Duration) {
+    backends
+        .iter()
+        .filter_map(|backend| backend.authorization.as_ref())
+        .fold(
+            (32 * 1024, Duration::from_secs(5)),
+            |(maximum, timeout), authorizer| {
+                let (policy_maximum, policy_timeout) = authorizer.request_limits();
+                (maximum.min(policy_maximum), timeout.min(policy_timeout))
+            },
+        )
+}
+
+pub(crate) fn select_runtime_for_path<'a>(
+    rules: &'a [BackendRuntime],
+    hostname: Option<&str>,
+    path: &str,
+) -> Option<&'a BackendRuntime> {
+    rules
+        .iter()
+        .filter(|runtime| {
+            runtime.matches_hostname(hostname)
+                && runtime
+                    .rule
+                    .path_prefix
+                    .as_deref()
+                    .is_some_and(|prefix| matches_path_prefix(prefix, path))
+        })
+        .max_by_key(|runtime| runtime.rule.path_prefix.as_ref().map_or(0, String::len))
+        .or_else(|| {
+            rules.iter().find(|runtime| {
+                runtime.matches_hostname(hostname) && runtime.rule.path_prefix.is_none()
+            })
+        })
 }
 
 /// Subscribe for matching requests and bridge accepted tunnels to backends.
@@ -165,26 +218,63 @@ async fn process_messages(
         .await
         .context("failed to subscribe to request subject")?;
 
+    let mut backends: Vec<BackendRuntime> = Vec::with_capacity(config.backend_rules.len());
+    let mut authorizers: Vec<(ClientAuthorizationConfig, authorization::JwtAuthorizer)> =
+        Vec::new();
+    for rule in config.backend_rules.iter().cloned() {
+        let policy = rule
+            .authorization
+            .clone()
+            .or_else(|| config.authorization.clone());
+        let authorization = if let Some(policy) = policy {
+            if let Some((_, existing)) =
+                authorizers.iter().find(|(existing, _)| *existing == policy)
+            {
+                Some(existing.clone())
+            } else {
+                let loaded = authorization::JwtAuthorizer::load(policy.clone())
+                    .await
+                    .context("initialize backend JWT authorization")?;
+                authorizers.push((policy, loaded.clone()));
+                Some(loaded)
+            }
+        } else {
+            None
+        };
+        backends.push(BackendRuntime {
+            rule,
+            authorization,
+        });
+    }
+    let backends = Arc::new(backends);
+
     let acme = if let Some(acme_config) = config.acme.clone() {
         anyhow::ensure!(
-            config.backend_rules.len() == 1,
-            "automatic certificates require exactly one backend rule per client route"
+            !backends.is_empty(),
+            "automatic certificates require at least one backend rule per client route"
         );
-        let backend = config.backend_rules[0].clone();
         anyhow::ensure!(
-            backend.pattern.eq_ignore_ascii_case(&acme_config.domain),
-            "automatic certificate domain must exactly match its backend pattern"
+            backends.iter().all(|backend| backend
+                .rule
+                .pattern
+                .eq_ignore_ascii_case(&acme_config.domain)),
+            "automatic certificate domain must exactly match every backend pattern"
         );
         Some(acme::AcmeRuntime::start(
             acme_config,
-            backend,
+            backends.clone(),
             config.relay_mode,
         )?)
     } else {
         None
     };
 
-    let state = AppState { config, nats, acme };
+    let state = AppState {
+        config,
+        nats,
+        acme,
+        backends,
+    };
     info!(
         client_id = %state.config.client_id,
         request_subject = %request_subject,
@@ -230,27 +320,28 @@ async fn process_messages(
 
 async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()> {
     let request: ConnectionRequest = decode_json(&message.payload)?;
-    let backend = match select_backend(&state.config.backend_rules, request.hostname.as_deref()) {
-        Some(rule) => rule.clone(),
-        None => {
-            // Building the pattern list is diagnostic-only; avoid its
-            // allocation entirely when debug tracing is disabled.
-            if enabled!(Level::DEBUG) {
-                let patterns: Vec<&str> = state
-                    .config
-                    .backend_rules
-                    .iter()
-                    .map(|rule| rule.pattern.as_str())
-                    .collect();
-                debug!(
-                    hostname = request.hostname.as_deref().unwrap_or("<default>"),
-                    ?patterns,
-                    "request does not match this client"
-                );
-            }
-            return Ok(());
+    if !state
+        .backends
+        .iter()
+        .any(|backend| backend.matches_hostname(request.hostname.as_deref()))
+    {
+        // Building the pattern list is diagnostic-only; avoid its
+        // allocation entirely when debug tracing is disabled.
+        if enabled!(Level::DEBUG) {
+            let patterns: Vec<&str> = state
+                .config
+                .backend_rules
+                .iter()
+                .map(|rule| rule.pattern.as_str())
+                .collect();
+            debug!(
+                hostname = request.hostname.as_deref().unwrap_or("<default>"),
+                ?patterns,
+                "request does not match this client"
+            );
         }
-    };
+        return Ok(());
+    }
 
     let ack = submit_claim(&state, &message, &request).await?;
     if !ack.accepted {
@@ -265,7 +356,7 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
     bridge_connection(
         &state.config.client_id,
         &request,
-        &backend,
+        state.backends.clone(),
         state.config.relay_mode,
         state.acme.as_ref(),
     )
@@ -325,7 +416,7 @@ async fn submit_claim(
 async fn bridge_connection(
     client_id: &str,
     request: &ConnectionRequest,
-    backend: &BackendRule,
+    backends: Arc<Vec<BackendRuntime>>,
     relay_mode: RelayMode,
     acme: Option<&acme::AcmeRuntime>,
 ) -> anyhow::Result<()> {
@@ -339,8 +430,13 @@ async fn bridge_connection(
         .await
         .context("failed to write prefix envelope")?;
 
-    let (backend_addr, plaintext_http) =
-        select_protocol_backend(backend, &server_stream, acme.is_some()).await?;
+    let inspect_http = acme.is_some()
+        || backends.iter().any(|backend| {
+            backend.rule.http_backend_addr.is_some()
+                || backend.rule.path_prefix.is_some()
+                || backend.authorization.is_some()
+        });
+    let plaintext_http = connection_is_plaintext_http(&server_stream, inspect_http).await?;
     if let Some(acme) = acme
         && !plaintext_http
     {
@@ -351,6 +447,47 @@ async fn bridge_connection(
         );
         return acme.accept(server_stream).await;
     }
+    let fallback = backends
+        .iter()
+        .find(|backend| {
+            backend.matches_hostname(request.hostname.as_deref())
+                && backend.rule.path_prefix.is_none()
+        })
+        .context("matching route has no fallback backend")?;
+    let (backend, buffered_request) = if plaintext_http && inspect_http {
+        let (maximum, header_timeout) = request_limits(&backends);
+        let request_bytes =
+            authorization::read_request_header(&mut server_stream, maximum, header_timeout).await?;
+        let path = authorization::request_path(&request_bytes)?;
+        let selected = select_runtime_for_path(&backends, request.hostname.as_deref(), path)
+            .context("HTTP request has no matching backend")?;
+        let mut request_bytes = match &selected.authorization {
+            Some(authorizer) => {
+                authorizer
+                    .authorize_request(&mut server_stream, request_bytes)
+                    .await?
+            }
+            None => request_bytes,
+        };
+        if selected.rule.strip_path_prefix {
+            request_bytes = authorization::strip_request_path_prefix(
+                request_bytes,
+                selected
+                    .rule
+                    .path_prefix
+                    .as_deref()
+                    .context("missing path_prefix")?,
+            )?;
+        }
+        (selected, Some(request_bytes))
+    } else {
+        (fallback, None)
+    };
+    let backend_addr = if plaintext_http {
+        backend.rule.resolved_http_backend_addr()
+    } else {
+        backend.rule.resolved_backend_addr()
+    };
     debug!(
         connection_id = %request.connection_id,
         client_id,
@@ -361,6 +498,12 @@ async fn bridge_connection(
     let mut backend_stream = TcpStream::connect(&backend_addr)
         .await
         .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+    if let Some(prefix) = buffered_request {
+        backend_stream
+            .write_all(&prefix)
+            .await
+            .context("forward authorized HTTP request headers")?;
+    }
 
     let (to_server, to_backend) =
         copy_bidirectional_with_mode(&mut server_stream, &mut backend_stream, relay_mode)
@@ -370,13 +513,12 @@ async fn bridge_connection(
     Ok(())
 }
 
-async fn select_protocol_backend(
-    backend: &BackendRule,
+async fn connection_is_plaintext_http(
     server_stream: &TcpStream,
     inspect_http: bool,
-) -> anyhow::Result<(String, bool)> {
-    if backend.http_backend_addr.is_none() && !inspect_http {
-        return Ok((backend.resolved_backend_addr(), false));
+) -> anyhow::Result<bool> {
+    if !inspect_http {
+        return Ok(false);
     }
 
     // HTTP and TLS both send bytes before Caddy responds. Bound the peek so
@@ -388,12 +530,7 @@ async fn select_protocol_backend(
             Ok(Err(error)) => return Err(error).context("failed to inspect tunneled protocol"),
             Err(_) => false,
         };
-    let address = if plaintext_http {
-        backend.resolved_http_backend_addr()
-    } else {
-        backend.resolved_backend_addr()
-    };
-    Ok((address, plaintext_http))
+    Ok(plaintext_http)
 }
 
 #[cfg(test)]
@@ -406,8 +543,11 @@ mod tests {
     fn selects_matching_backend_rule() {
         let rules = vec![BackendRule {
             pattern: "*.example.com".to_string(),
+            path_prefix: None,
+            strip_path_prefix: false,
             backend_addr: "127.0.0.1:443".to_string(),
             http_backend_addr: Some("127.0.0.1:80".to_string()),
+            authorization: None,
         }];
 
         let selected = select_backend(&rules, Some("api.example.com")).expect("match");
@@ -422,28 +562,10 @@ mod tests {
         let (server_stream, _) = listener.accept().await?;
         peer.write_all(b"GET / HTTP/1.1\r\n").await?;
 
-        let split = BackendRule {
-            pattern: "example.com".to_string(),
-            backend_addr: "127.0.0.1:443".to_string(),
-            http_backend_addr: Some("127.0.0.1:80".to_string()),
-        };
-        assert_eq!(
-            select_protocol_backend(&split, &server_stream, false).await?,
-            ("127.0.0.1:80".to_string(), true)
-        );
+        assert!(connection_is_plaintext_http(&server_stream, true).await?);
 
-        let unsplit = BackendRule {
-            http_backend_addr: None,
-            ..split
-        };
-        assert_eq!(
-            select_protocol_backend(&unsplit, &server_stream, false).await?,
-            ("127.0.0.1:443".to_string(), false)
-        );
-        assert_eq!(
-            select_protocol_backend(&unsplit, &server_stream, true).await?,
-            ("127.0.0.1:443".to_string(), true)
-        );
+        assert!(!connection_is_plaintext_http(&server_stream, false).await?);
+        assert!(connection_is_plaintext_http(&server_stream, true).await?);
         Ok(())
     }
 }
