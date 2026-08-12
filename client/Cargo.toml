@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 autobins = false
 
@@ -32,4 +32,5 @@ tracing.workspace = true
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 open.workspace = true
 tray-icon.workspace = true
+tiny-skia.workspace = true
 winit.workspace = true

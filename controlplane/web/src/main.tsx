@@ -2,8 +2,18 @@ import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
 import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
-import brandLogo from "./lfp-connect-reversed.svg";
 import "./styles.css";
+
+type BrandSettings = {
+  name: string; logo_url: string; favicon_url: string; color: string;
+  color_strong: string; ink: string; canvas: string;
+};
+
+const defaultBrand: BrandSettings = {
+  name: "LFP Connect", logo_url: "/assets/lfp-connect-reversed.svg",
+  favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61",
+  color_strong: "#e85c50", ink: "#0b1426", canvas: "#0b1426",
+};
 
 type Identity = {
   subject: string; name: string; email: string; entitlements: string[];
@@ -19,7 +29,20 @@ type ServicePrincipal = { id: number; username: string; name: string; client_id:
 type OAuthSettings = { token_url: string; client_id: string; control_plane_url: string; scopes: string[]; nats_urls: string[] };
 type CreatedPrincipal = { service_principal: ServicePrincipal; client_secret: string; oauth: OAuthSettings };
 
-function Brand() { return <img className="brand" src={brandLogo} alt="LFP Connect" />; }
+function applyBrand(brand: BrandSettings) {
+  const root = document.documentElement.style;
+  root.setProperty("--color-brand", brand.color);
+  root.setProperty("--color-brand-strong", brand.color_strong);
+  root.setProperty("--color-brand-ink", brand.ink);
+  root.setProperty("--color-canvas", brand.canvas);
+  document.title = `${brand.name} Pipe`;
+  const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (favicon) favicon.href = brand.favicon_url;
+}
+
+function Brand({ settings }: { settings: BrandSettings }) {
+  return <img className="brand" src={settings.logo_url} alt={settings.name} />;
+}
 function normalizeEntitlement(value: string) { return value.startsWith("route:") ? value.slice(6) : value; }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -34,6 +57,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function App() {
+  const [brand, setBrand] = useState(defaultBrand);
   const [identity, setIdentity] = useState<Identity>();
   const [hostname, setHostname] = useState("");
   const [clientName, setClientName] = useState("");
@@ -65,6 +89,10 @@ function App() {
   }
 
   useEffect(() => {
+    fetch("/api/branding", { credentials: "same-origin" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("branding unavailable")))
+      .then((settings: BrandSettings) => { applyBrand(settings); setBrand(settings); })
+      .catch(() => applyBrand(defaultBrand));
     api<Identity>("/api/me")
       .then((value) => {
         setIdentity(value);
@@ -177,7 +205,7 @@ http_backend_addr = "127.0.0.1:80"
 
   return (
     <div className="shell">
-      <header className="topbar"><Brand /><button className="button secondary compact" onClick={logout}><LogOut size={16} /><span>Sign out</span></button></header>
+      <header className="topbar"><Brand settings={brand} /><button className="button secondary compact" onClick={logout}><LogOut size={16} /><span>Sign out</span></button></header>
       <main className="main"><section className="dashboard">
         <div className="dashboard-header">
           <div><span className="eyebrow">Pipe</span><h1>Route console</h1></div>

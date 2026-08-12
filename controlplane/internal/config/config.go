@@ -3,6 +3,7 @@ package config
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -35,10 +36,27 @@ type Config struct {
 	NATSInternalServerToken  string
 	NATSTunnelAccount        string
 	NATSRequestSubjectPrefix string
+	Brand                    BrandConfig
+}
+
+// BrandConfig is the runtime-selectable identity exposed to the web console.
+type BrandConfig struct {
+	Name        string `json:"name"`
+	LogoURL     string `json:"logo_url"`
+	FaviconURL  string `json:"favicon_url"`
+	Color       string `json:"color"`
+	ColorStrong string `json:"color_strong"`
+	Ink         string `json:"ink"`
+	Canvas      string `json:"canvas"`
 }
 
 // Load resolves environment values and reads secret material from *_FILE paths.
 func Load() (Config, error) {
+	return LoadArgs(os.Args[1:])
+}
+
+// LoadArgs resolves CLI flags over environment variables and typed defaults.
+func LoadArgs(args []string) (Config, error) {
 	cfg := Config{
 		HTTPAddr:                 envOr("LFP_AUTH_HTTP_ADDR", ":8080"),
 		PublicURL:                strings.TrimRight(os.Getenv("LFP_AUTH_PUBLIC_URL"), "/"),
@@ -54,6 +72,26 @@ func Load() (Config, error) {
 		NATSCalloutUser:          envOr("LFP_AUTH_NATS_CALLOUT_USER", "auth-svc"),
 		NATSTunnelAccount:        envOr("LFP_AUTH_NATS_TUNNEL_ACCOUNT", "TUNNELS"),
 		NATSRequestSubjectPrefix: envOr("LFP_AUTH_NATS_SUBJECT_PREFIX", "lfp.v1.connect"),
+		Brand: BrandConfig{
+			Name:        envOr("LFP_AUTH_BRAND_NAME", "LFP Connect"),
+			LogoURL:     envOr("LFP_AUTH_BRAND_LOGO_URL", "/assets/lfp-connect-reversed.svg"),
+			FaviconURL:  envOr("LFP_AUTH_BRAND_FAVICON_URL", "/assets/lfp-favicon.svg"),
+			Color:       envOr("LFP_AUTH_BRAND_COLOR", "#ff6f61"),
+			ColorStrong: envOr("LFP_AUTH_BRAND_COLOR_STRONG", "#e85c50"),
+			Ink:         envOr("LFP_AUTH_BRAND_INK", "#0b1426"),
+			Canvas:      envOr("LFP_AUTH_BRAND_CANVAS", "#0b1426"),
+		},
+	}
+	flags := flag.NewFlagSet("lfp-connect-auth", flag.ContinueOnError)
+	flags.StringVar(&cfg.Brand.Name, "brand-name", cfg.Brand.Name, "management website brand name")
+	flags.StringVar(&cfg.Brand.LogoURL, "brand-logo-url", cfg.Brand.LogoURL, "management website logo URL")
+	flags.StringVar(&cfg.Brand.FaviconURL, "brand-favicon-url", cfg.Brand.FaviconURL, "management website favicon URL")
+	flags.StringVar(&cfg.Brand.Color, "brand-color", cfg.Brand.Color, "management website primary color")
+	flags.StringVar(&cfg.Brand.ColorStrong, "brand-color-strong", cfg.Brand.ColorStrong, "management website hover color")
+	flags.StringVar(&cfg.Brand.Ink, "brand-ink", cfg.Brand.Ink, "management website foreground ink")
+	flags.StringVar(&cfg.Brand.Canvas, "brand-canvas", cfg.Brand.Canvas, "management website canvas color")
+	if err := flags.Parse(args); err != nil {
+		return Config{}, err
 	}
 
 	var err error
@@ -99,6 +137,9 @@ func Load() (Config, error) {
 	}
 	if cfg.OIDCClientSecret == "" || cfg.AuthentikAPIToken == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalServerToken == "" {
 		return Config{}, errors.New("OIDC, Authentik API, NATS callout, issuer, and internal server secrets must not be empty")
+	}
+	if cfg.Brand.Name == "" || cfg.Brand.LogoURL == "" || cfg.Brand.FaviconURL == "" {
+		return Config{}, errors.New("brand name, logo URL, and favicon URL must not be empty")
 	}
 	return cfg, nil
 }

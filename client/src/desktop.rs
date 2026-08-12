@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use shared::{cli::DesktopMode, config::ClientConfig};
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
@@ -219,19 +220,86 @@ fn restart_current_process(config_path: &Path) -> anyhow::Result<()> {
 
 fn make_icon() -> anyhow::Result<Icon> {
     const SIZE: u32 = 32;
-    let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 - 15.5;
-            let dy = y as f32 - 15.5;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let ring = (8.0..=13.5).contains(&distance);
-            let stem = (14..=18).contains(&x) && (5..=17).contains(&y);
-            if ring || stem {
-                let offset = ((y * SIZE + x) * 4) as usize;
-                rgba[offset..offset + 4].copy_from_slice(&[38, 166, 154, 255]);
+    let mut pixmap = Pixmap::new(SIZE, SIZE).ok_or_else(|| anyhow!("create tray icon pixmap"))?;
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(255, 111, 97, 255);
+    paint.anti_alias = true;
+
+    // Compact version of the coral lowercase LFP monogram used by the web UI.
+    // The geometry is drawn at 140px source scale and fitted into a square so
+    // the same recognizable mark remains crisp in 16px and 32px system trays.
+    let transform = Transform::from_scale(0.16, 0.16).post_translate(1.0, 4.5);
+    for path in [brand_l_path(), brand_f_path(), brand_p_path()] {
+        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    }
+
+    let mut rgba = pixmap.take();
+    // tiny-skia stores premultiplied RGBA while tray-icon accepts straight
+    // RGBA. Undo premultiplication so anti-aliased coral edges retain hue.
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha > 0 && alpha < 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 / alpha).min(255)) as u8;
             }
         }
     }
     Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| anyhow!(error))
+}
+
+fn brand_l_path() -> tiny_skia::Path {
+    let mut path = PathBuilder::new();
+    path.move_to(12.0, 8.0);
+    path.line_to(38.0, 8.0);
+    path.line_to(38.0, 99.0);
+    path.cubic_to(38.0, 108.0, 43.0, 113.0, 53.0, 113.0);
+    path.line_to(58.0, 113.0);
+    path.line_to(58.0, 136.0);
+    path.line_to(46.0, 136.0);
+    path.cubic_to(24.0, 136.0, 12.0, 123.0, 12.0, 101.0);
+    path.close();
+    path.finish().expect("valid brand L path")
+}
+
+fn brand_f_path() -> tiny_skia::Path {
+    let mut path = PathBuilder::new();
+    path.move_to(61.0, 136.0);
+    path.line_to(61.0, 61.0);
+    path.line_to(49.0, 61.0);
+    path.line_to(49.0, 39.0);
+    path.line_to(61.0, 39.0);
+    path.line_to(61.0, 34.0);
+    path.cubic_to(61.0, 13.0, 73.0, 2.0, 95.0, 2.0);
+    path.line_to(115.0, 2.0);
+    path.line_to(115.0, 25.0);
+    path.line_to(98.0, 25.0);
+    path.cubic_to(90.0, 25.0, 87.0, 29.0, 87.0, 36.0);
+    path.line_to(87.0, 39.0);
+    path.line_to(115.0, 39.0);
+    path.line_to(115.0, 61.0);
+    path.line_to(87.0, 61.0);
+    path.line_to(87.0, 136.0);
+    path.close();
+    path.finish().expect("valid brand F path")
+}
+
+fn brand_p_path() -> tiny_skia::Path {
+    let mut path = PathBuilder::new();
+    path.move_to(94.0, 39.0);
+    path.line_to(119.0, 39.0);
+    path.line_to(119.0, 48.0);
+    path.cubic_to(127.0, 40.0, 137.0, 36.0, 148.0, 36.0);
+    path.cubic_to(175.0, 36.0, 190.0, 57.0, 190.0, 86.0);
+    path.cubic_to(190.0, 115.0, 175.0, 136.0, 148.0, 136.0);
+    path.cubic_to(137.0, 136.0, 128.0, 132.0, 120.0, 125.0);
+    path.line_to(120.0, 140.0);
+    path.line_to(94.0, 140.0);
+    path.close();
+    path.move_to(142.0, 113.0);
+    path.cubic_to(156.0, 113.0, 164.0, 102.0, 164.0, 86.0);
+    path.cubic_to(164.0, 70.0, 156.0, 59.0, 142.0, 59.0);
+    path.cubic_to(128.0, 59.0, 119.0, 70.0, 119.0, 86.0);
+    path.cubic_to(119.0, 102.0, 128.0, 113.0, 142.0, 113.0);
+    path.close();
+    path.finish().expect("valid brand P path")
 }

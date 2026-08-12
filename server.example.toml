@@ -10,3 +10,10 @@ request_subject = "tunnel.connect.request"
 domain_subject_routing = false
 claim_timeout_ms = 3000
 pending_timeout_ms = 10000
+
+# Optional exact TLS/SNI passthrough on the public port. For NATS, configure
+# both nats-server and clients for TLS-first handshakes so the ClientHello/SNI
+# arrives before NATS sends its INFO line.
+# [[sni_passthrough_routes]]
+# hostname = "nats-pipe.example.com"
+# backend_addr = "127.0.0.1:4222"

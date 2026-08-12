@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.html",
-    "build": "bun build src/index.html --outdir=dist --target=browser --minify --sourcemap=linked",
+    "build": "bun build src/index.html --outdir=dist --target=browser --minify --sourcemap=linked && bun run assets",
+    "assets": "bun run tools/copy-assets.ts",
     "typecheck": "bun x tsc --noEmit"
   },
   "dependencies": {

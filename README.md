@@ -27,6 +27,26 @@ relay implementation used by both binaries. See
 
 NATS is the control plane only. Payload traffic does not pass through NATS.
 
+The public listener can also forward selected TLS connections directly by SNI,
+allowing a TLS-first NATS endpoint to share the HTTPS port:
+
+```toml
+[[sni_passthrough_routes]]
+hostname = "nats-pipe.example.com"
+backend_addr = "127.0.0.1:4222"
+```
+
+NATS must use `tls.handshake_first: true`, and clients must enable TLS-first
+(the lfp-pipe Rust NATS client does this for `tls://` URLs). Classic NATS is
+server-first and cannot be identified by sniffing client bytes on a shared
+listener. The passthrough keeps NATS TLS and authentication end-to-end.
+
+Alternatively, enable the `async-nats` WebSocket transport by configuring a
+`ws://` or `wss://` NATS URL. This is opt-in and preserves the complete URL path,
+so a reverse proxy can route `wss://pipe.example.com/nats` beside management
+HTTP traffic on one hostname and port. Existing `nats://` and `tls://` URLs keep
+their current direct-TCP behavior.
+
 > [!WARNING]
 > The reverse data connection currently has no cryptographic authentication.
 > The random connection ID is a binding token, not a durable authentication

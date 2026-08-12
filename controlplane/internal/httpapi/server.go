@@ -94,6 +94,9 @@ func (s *Server) Handler() http.Handler {
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	router.Get("/api/branding", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.cfg.Brand)
+	})
 	router.Get("/api/auth/login", s.login)
 	router.Get("/api/auth/callback", s.callback)
 	router.Post("/api/auth/logout", s.logout)

@@ -4,12 +4,12 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.7"
+version = "0.1.8"
 
 [workspace.dependencies]
 anyhow = "1.0"
 atomic-write-file = "0.3.1"
-async-nats = "0.44"
+async-nats = { version = "0.44", features = ["websockets"] }
 base64 = "0.22"
 bytes = "1.10"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -28,6 +28,7 @@ toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tray-icon = "0.24.2"
+tiny-skia = "0.11.4"
 winit = "0.30.13"
 open = "5.4.1"
 tokio-splice2 = "0.3.2"

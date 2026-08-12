@@ -7,7 +7,7 @@ the server or client crates.
 |---|---|---|---|
 | `parse_server_runtime`, `parse_client_runtime`, `DesktopMode` | `shared/src/cli.rs` | Resolve Clap flags and environment variables, then layer them over TOML configuration; client parsing expands all route sessions and selects automatic/required/headless desktop integration. | Binary entry points |
 | `desktop::run`, `desktop::is_available` | `client/src/desktop.rs` | Host the portable tray-icon/winit event loop, expose status/open-config/reload/exit actions, and supervise the async tunnel runtime on a worker thread. | Client binary on Windows, macOS, and desktop Linux |
-| `ServerConfig`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define concrete typed component configuration, defaults, and routing data. | CLI, server, client |
+| `ServerConfig`, `SniPassthroughRoute`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define concrete typed component configuration, exact direct TLS/SNI passthrough routes, defaults, and tunnel routing data. | CLI, server, client |
 | `ClientConfigDefaults`, `ClientRouteConfig`, `ClientPathRouteConfig`, `load_client_configs` | `shared/src/config.rs` | Inherit shared settings into independently authenticated hostname sessions and path-specific backends while retaining the legacy format. | Multi-route tunnel client |
 | `ClientOAuthConfig` | `shared/src/config.rs` | Configure Authentik machine credentials and automatic route-ticket renewal without storing NATS tickets. | Tunnel client |
 | `ClientAuthorizationConfig`, `ClientAuthorizationDefaults` | `shared/src/config.rs` | Configure exact-issuer/audience JWT validation, role policy, and bounded-staleness JWKS caching for protected HTTP routes. | Tunnel client |
@@ -19,6 +19,7 @@ the server or client crates.
 | `init`, `is_expected_disconnect` | `shared/src/logging.rs` | Initialize low-noise tracing and classify normal peer teardown. | Binary entry points and relay loops |
 | `connect_nats` | `shared/src/nats.rs` | Establish a deterministic NATS control-plane connection. | Server and client startup |
 | `connect_nats_with_token` | `shared/src/nats.rs` | Establish NATS connections from short-lived in-memory OAuth exchanges. | OAuth tunnel client |
+| `BrandConfig`, `/api/branding` | `controlplane/internal/config`, `controlplane/internal/httpapi` | Resolve CLI-over-environment management branding and expose it to the static web console. | Auth service and management web |
 | `hostname_request_subject` | `shared/src/routing.rs` | Convert a validated hostname into a reversed-domain NATS subject. | Domain-scoped control plane |
 | `PrefixEnvelope` | `shared/src/prefix.rs` | Encode and validate the versioned callback-to-ingress binding prefix. | Client callback and public server |
 | `ConnectionRequest`, `ConnectionClaim`, `ConnectionClaimAck` | `shared/src/protocol.rs` | Define JSON messages exchanged over NATS. | Server and client control plane |

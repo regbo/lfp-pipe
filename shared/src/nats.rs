@@ -33,7 +33,7 @@ pub async fn connect_nats_with_token(
     let parsed = Url::parse(nats_url).context("failed to parse NATS URL")?;
 
     ensure!(
-        matches!(parsed.scheme(), "nats" | "tls"),
+        matches!(parsed.scheme(), "nats" | "tls" | "ws" | "wss"),
         "unsupported NATS URL scheme {}",
         parsed.scheme()
     );
@@ -44,7 +44,20 @@ pub async fn connect_nats_with_token(
     let port = parsed
         .port_or_known_default()
         .ok_or_else(|| anyhow!("NATS URL missing port"))?;
-    let connect_url = format!("{}://{host}:{port}", parsed.scheme());
+    // Preserve WebSocket paths such as `/nats`; reverse proxies use them to
+    // multiplex the otherwise normal NATS protocol with HTTPS on one origin.
+    let connect_url = if matches!(parsed.scheme(), "ws" | "wss") {
+        let mut public_url = parsed.clone();
+        public_url
+            .set_username("")
+            .map_err(|_| anyhow!("failed to normalize NATS WebSocket username"))?;
+        public_url
+            .set_password(None)
+            .map_err(|_| anyhow!("failed to normalize NATS WebSocket password"))?;
+        public_url.to_string()
+    } else {
+        format!("{}://{host}:{port}", parsed.scheme())
+    };
 
     let mut options = ConnectOptions::new()
         .ignore_discovered_servers()
@@ -73,4 +86,16 @@ pub async fn connect_nats_with_token(
         .connect(connect_url)
         .await
         .with_context(|| format!("failed to connect to NATS at {host}:{port}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    #[test]
+    fn websocket_url_retains_reverse_proxy_path() {
+        let parsed = Url::parse("wss://pipe.example.com/nats").expect("url");
+        assert_eq!(parsed.scheme(), "wss");
+        assert_eq!(parsed.path(), "/nats");
+    }
 }

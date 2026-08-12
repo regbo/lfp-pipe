@@ -74,6 +74,21 @@ pub struct ServerConfig {
     /// Maximum wait for the winning client's callback socket.
     #[serde(default = "default_pending_timeout_ms")]
     pub pending_timeout_ms: u64,
+    /// Exact TLS SNI routes forwarded directly from the public listener.
+    ///
+    /// This is suitable for TLS-first protocols such as NATS with
+    /// `handshake_first: true`; TLS remains end-to-end to the backend.
+    #[serde(default)]
+    pub sni_passthrough_routes: Vec<SniPassthroughRoute>,
+}
+
+/// One exact TLS hostname forwarded directly by the public server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SniPassthroughRoute {
+    /// Exact, case-insensitive TLS Server Name Indication value.
+    pub hostname: String,
+    /// TCP destination that terminates TLS and handles the application protocol.
+    pub backend_addr: String,
 }
 
 /// Optional server values supplied by Clap after CLI/environment resolution.
@@ -677,8 +692,33 @@ fn default_auth_max_header_bytes() -> usize {
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read server config {}", path.display()))?;
-    toml::from_str(&raw)
-        .with_context(|| format!("failed to parse server config {}", path.display()))
+    let config: ServerConfig = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse server config {}", path.display()))?;
+    validate_server_config(&config)
+        .with_context(|| format!("invalid server config {}", path.display()))?;
+    Ok(config)
+}
+
+fn validate_server_config(config: &ServerConfig) -> anyhow::Result<()> {
+    let mut hostnames = HashSet::new();
+    for route in &config.sni_passthrough_routes {
+        let hostname = route.hostname.trim().to_ascii_lowercase();
+        anyhow::ensure!(
+            !hostname.is_empty(),
+            "SNI passthrough hostname cannot be empty"
+        );
+        anyhow::ensure!(
+            !route.backend_addr.trim().is_empty(),
+            "SNI passthrough backend_addr cannot be empty for {}",
+            route.hostname
+        );
+        anyhow::ensure!(
+            hostnames.insert(hostname),
+            "duplicate SNI passthrough hostname {}",
+            route.hostname
+        );
+    }
+    Ok(())
 }
 
 /// Load client TOML without applying CLI or environment overrides.

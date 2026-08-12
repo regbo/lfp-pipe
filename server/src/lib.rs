@@ -12,7 +12,7 @@ use anyhow::{Context, anyhow};
 use async_nats::Client;
 use futures::StreamExt;
 use shared::{
-    config::ServerConfig,
+    config::{ServerConfig, SniPassthroughRoute},
     http::{extract_http_host, looks_like_http_prefix},
     io::copy_bidirectional_with_mode,
     logging::is_expected_disconnect,
@@ -121,6 +121,25 @@ async fn accept_data_loop(listener: TcpListener, state: AppState) -> anyhow::Res
 
 async fn handle_ingress(stream: TcpStream, state: AppState) -> anyhow::Result<()> {
     let hostname = detect_hostname(&stream).await?;
+    if let Some(route) =
+        select_sni_passthrough(&state.config.sni_passthrough_routes, hostname.as_deref())
+    {
+        let mut backend = TcpStream::connect(&route.backend_addr)
+            .await
+            .with_context(|| format!("connect SNI passthrough backend {}", route.backend_addr))?;
+        debug!(
+            hostname = %route.hostname,
+            backend_addr = %route.backend_addr,
+            "forwarding direct SNI passthrough"
+        );
+        let mut ingress = stream;
+        let (upstream, downstream) =
+            copy_bidirectional_with_mode(&mut ingress, &mut backend, state.config.relay_mode)
+                .await
+                .context("copy SNI passthrough stream")?;
+        debug!(upstream, downstream, "SNI passthrough finished");
+        return Ok(());
+    }
     let connection_id = Uuid::new_v4().to_string();
     let claim = broadcast_and_wait_for_claim(&state, &connection_id, hostname.as_deref()).await?;
     let route_label = hostname.as_deref().unwrap_or("<default>");
@@ -142,6 +161,16 @@ async fn handle_ingress(stream: TcpStream, state: AppState) -> anyhow::Result<()
 
     spawn_pending_cleanup(state, connection_id);
     Ok(())
+}
+
+fn select_sni_passthrough<'a>(
+    routes: &'a [SniPassthroughRoute],
+    hostname: Option<&str>,
+) -> Option<&'a SniPassthroughRoute> {
+    let hostname = hostname?;
+    routes
+        .iter()
+        .find(|route| route.hostname.eq_ignore_ascii_case(hostname))
 }
 
 async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<Option<String>> {
@@ -381,7 +410,9 @@ fn unix_time_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use shared::prefix::PrefixEnvelope;
+    use shared::{config::SniPassthroughRoute, prefix::PrefixEnvelope};
+
+    use super::select_sni_passthrough;
 
     #[test]
     fn prefix_round_trip_for_server_binding() {
@@ -390,5 +421,17 @@ mod tests {
         let decoded = PrefixEnvelope::decode_line(&encoded).expect("decode");
         assert_eq!(decoded.client_id, "client-a");
         assert_eq!(decoded.connection_id, "conn-a");
+    }
+
+    #[test]
+    fn direct_sni_passthrough_matches_exact_hostname_case_insensitively() {
+        let routes = vec![SniPassthroughRoute {
+            hostname: "nats-pipe.example.com".into(),
+            backend_addr: "127.0.0.1:4222".into(),
+        }];
+        let selected = select_sni_passthrough(&routes, Some("NATS-PIPE.EXAMPLE.COM"));
+        assert_eq!(selected, routes.first());
+        assert!(select_sni_passthrough(&routes, Some("other.example.com")).is_none());
+        assert!(select_sni_passthrough(&routes, None).is_none());
     }
 }
