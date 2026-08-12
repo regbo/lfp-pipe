@@ -201,18 +201,8 @@ impl TrayApplication {
             format!("Running · {route_count} route(s)")
         };
         let status = MenuItem::with_id("status", initial_status, false, None);
-        let open_config = MenuItem::with_id(
-            OPEN_CONFIG_ID,
-            "Open local config (advanced)",
-            !managed_central,
-            None,
-        );
-        let open_folder = MenuItem::with_id(
-            OPEN_FOLDER_ID,
-            "Open local config folder",
-            !managed_central,
-            None,
-        );
+        let open_config = MenuItem::with_id(OPEN_CONFIG_ID, "Open local config", true, None);
+        let open_folder = MenuItem::with_id(OPEN_FOLDER_ID, "Open local config folder", true, None);
         let auto_launch = crate::desktop_settings::auto_launch()?;
         let start_at_boot = CheckMenuItem::with_id(
             START_BOOT_ID,
@@ -239,19 +229,21 @@ impl TrayApplication {
         let exit = MenuItem::with_id(EXIT_ID, "Exit lfp-pipe", true, None);
         let separator_before_actions = PredefinedMenuItem::separator();
         let separator_before_exit = PredefinedMenuItem::separator();
-        let menu = Menu::with_items(&[
+        let mut items: Vec<&dyn tray_icon::menu::IsMenuItem> = vec![
             &status,
             &separator_before_actions,
-            &open_config,
-            &open_folder,
             &start_at_boot,
             &remote_managed,
             &manage,
             &management_url,
-            &separator_before_exit,
-            &exit,
-        ])
-        .context("create tray menu")?;
+        ];
+        if !managed_central {
+            items.push(&open_config);
+            items.push(&open_folder);
+        }
+        items.push(&separator_before_exit);
+        items.push(&exit);
+        let menu = Menu::with_items(&items).context("create tray menu")?;
         Ok(Self {
             config_path,
             status,
