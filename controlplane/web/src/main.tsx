@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
-import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, KeyRound, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge, Button, Checkbox, Divider, Group, Loader, MantineProvider, Menu, Select, TextInput, UnstyledButton } from "@mantine/core";
 import { ConfigEditor } from "./config-editor";
 import { appTheme, applyBrand, defaultBrand, type BrandSettings } from "./theme";
@@ -286,7 +286,7 @@ http_backend_addr = "127.0.0.1:80"
     window.location.assign("/");
   }
 
-  if (!identity) return <div className="loading" role="status" aria-label="Loading management console"><Loader color="coral" /></div>;
+  if (!identity) return <div className="loading" role="status" aria-label="Loading management console"><Loader /></div>;
 
   const oauthExample = createdPrincipal ? `[oauth]\ntoken_url = "${createdPrincipal.oauth.token_url}"\nprovider_client_id = "${createdPrincipal.oauth.client_id}"\nusername = "${createdPrincipal.service_principal.username}"\nclient_secret_file = "/run/secrets/lfp_pipe_client_secret"\ncontrol_plane_url = "${createdPrincipal.oauth.control_plane_url}"\nhostname = "host.${createdPrincipal.service_principal.entitlement}"` : "";
 
@@ -319,7 +319,7 @@ http_backend_addr = "127.0.0.1:80"
           </div>}
 
           <div className="principal-list">
-            {principalsLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading Authentik policies…</span></Group> : principalsError ? <p className="error">{principalsError}</p> : automationPrincipals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Machine credential"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</Button></div>; })}
+            {principalsLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading Authentik policies…</span></Group> : principalsError ? <p className="error">{principalsError}</p> : automationPrincipals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Machine credential"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><Loader size="xs" />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</Button></div>; })}
           </div>
           {selectedPrincipals.length > 0 ? <div className="list-footer"><span>{selectedPrincipals.length} selected</span><Button variant="light" leftSection={<Download size={15} />} onClick={() => void downloadSelectedConfigs()}>Export selected</Button></div> : null}
           <Divider label="Temporary credential" labelPosition="left" />
