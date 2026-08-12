@@ -2,36 +2,12 @@ import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
 import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
-import { Badge, Button, Checkbox, Divider, Group, Input, Loader, MantineProvider, Menu, Select, TextInput, UnstyledButton, createTheme } from "@mantine/core";
+import { Badge, Button, Checkbox, Divider, Group, Loader, MantineProvider, Menu, Select, TextInput, UnstyledButton } from "@mantine/core";
 import { ConfigEditor } from "./config-editor";
+import { appTheme, applyBrand, defaultBrand, type BrandSettings } from "./theme";
 import "@mantine/core/styles.css";
 import "./styles.css";
 
-const theme = createTheme({
-  primaryColor: "coral",
-  defaultRadius: "md",
-  fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-  colors: { coral: ["#fff1ef", "#ffe2de", "#ffc4bd", "#ffa59b", "#ff877b", "#ff6f61", "#e85c50", "#c9473d", "#a93730", "#872b26"] },
-  components: {
-    TextInput: TextInput.extend({ defaultProps: { size: "xs" } }),
-    Select: Select.extend({ defaultProps: { size: "xs", allowDeselect: false } }),
-    Button: Button.extend({
-      defaultProps: { size: "xs", color: "coral" },
-    }),
-    InputWrapper: Input.Wrapper.extend({ defaultProps: { inputWrapperOrder: ["label", "input", "description", "error"] } }),
-  },
-});
-
-type BrandSettings = {
-  name: string; logo_url: string; favicon_url: string; color: string;
-  color_strong: string; ink: string;
-};
-
-const defaultBrand: BrandSettings = {
-  name: "LFP Connect", logo_url: "/assets/lfp-connect-auto.svg",
-  favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61",
-  color_strong: "#e85c50", ink: "#0b1426",
-};
 
 type Identity = {
   subject: string; name: string; email: string; entitlements: string[];
@@ -48,16 +24,6 @@ type OAuthSettings = { token_url: string; client_id: string; control_plane_url: 
 type CreatedPrincipal = { service_principal: ServicePrincipal; client_secret: string; oauth: OAuthSettings };
 type ManagedClient = { username: string; name: string; version: string; platform: string; last_seen: string; online?: boolean };
 type Enrollment = { code: string; device_id: string; name: string; platform: string; version: string; expires_at: string };
-
-function applyBrand(brand: BrandSettings) {
-  const root = document.documentElement.style;
-  root.setProperty("--color-brand", brand.color);
-  root.setProperty("--color-brand-strong", brand.color_strong);
-  root.setProperty("--color-brand-ink", brand.ink);
-  document.title = `${brand.name} Pipe`;
-  const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-  if (favicon) favicon.href = brand.favicon_url;
-}
 
 function Brand({ settings }: { settings: BrandSettings }) {
   return <img className="brand" src={settings.logo_url} alt={settings.name} />;
@@ -366,4 +332,4 @@ http_backend_addr = "127.0.0.1:80"
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><MantineProvider theme={theme} defaultColorScheme="auto"><App /></MantineProvider></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><MantineProvider theme={appTheme} defaultColorScheme="auto"><App /></MantineProvider></StrictMode>);

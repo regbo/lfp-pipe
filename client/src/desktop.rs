@@ -245,7 +245,7 @@ impl TrayApplication {
         );
         let manage = MenuItem::with_id(MANAGE_ID, "Manage", true, None);
         let management_url =
-            MenuItem::with_id(MANAGEMENT_URL_ID, "Change management server…", true, None);
+            MenuItem::with_id(MANAGEMENT_URL_ID, "Change management server", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "Exit lfp-pipe", true, None);
         let separator_before_actions = PredefinedMenuItem::separator();
         let separator_before_exit = PredefinedMenuItem::separator();
@@ -255,9 +255,9 @@ impl TrayApplication {
             &start_at_boot,
             &remote_managed,
             &manage,
+            &management_url,
         ];
         if !managed_central {
-            items.push(&management_url);
             items.push(&open_config);
             items.push(&open_folder);
         }
