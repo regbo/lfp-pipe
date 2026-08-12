@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
-import { ActionIcon, Button, Checkbox, Fieldset, Group, NumberInput, Select, SimpleGrid, Stack, Tabs, TextInput } from "@mantine/core";
+import { Accordion, ActionIcon, Button, Checkbox, Fieldset, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
 
 type Table = Record<string, unknown>;
 type Route = Table & { path_routes?: PathRoute[] };
@@ -20,7 +20,6 @@ type ConfigEditorProps = { toml: string; onChange: (toml: string) => void };
 
 export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   const [document, setDocument] = useState<Table>(() => parse(toml) as Table);
-  const [tab, setTab] = useState<"routes" | "advanced">("routes");
 
   function update(mutator: (draft: Table) => void) {
     const draft = structuredClone(document);
@@ -43,24 +42,26 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   });
 
   return <div className="structured-config">
-    <Tabs value={tab} onChange={(value) => setTab((value ?? "routes") as "routes" | "advanced")}><Tabs.List className="config-tabs"><Tabs.Tab value="routes">Routes</Tabs.Tab><Tabs.Tab value="advanced">Advanced</Tabs.Tab></Tabs.List>
-    <Tabs.Panel value="routes">
-    <Fieldset className="config-group" legend="Default backend"><div className="config-grid">
-      <TextField className="field-span-wide" label="TLS backend" value={text(defaults.backend_addr)} onChange={(value) => setDefault("backend_addr", value)} />
-      <TextField className="field-span-wide" label="HTTP backend" value={text(defaults.http_backend_addr)} onChange={(value) => setDefault("http_backend_addr", value)} />
-    </div></Fieldset>
-
     <div className="config-section-heading"><div><strong>Routes</strong><span>Public hostnames and the local services they reach.</span></div><Button variant="light" size="xs" leftSection={<Plus size={15} />} type="button" onClick={() => update((draft) => { const items = asRoutes(draft.routes); items.push({ client_id: "new-route", hostname: "route.pipe.example.com", path_routes: [] }); draft.routes = items; })}>Add route</Button></div>
     {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} setRoute={setRoute} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
-    </Tabs.Panel><Tabs.Panel value="advanced">
-    <Fieldset className="config-group" legend="NATS transport"><Stack gap="sm">
+
+    <Accordion className="config-disclosures" variant="separated" multiple>
+    <Accordion.Item value="connection-defaults"><Accordion.Control>Connection defaults</Accordion.Control><Accordion.Panel><Stack gap="sm">
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+        <TextField label="TLS backend" value={text(defaults.backend_addr)} onChange={(value) => setDefault("backend_addr", value)} />
+        <TextField label="HTTP backend" value={text(defaults.http_backend_addr)} onChange={(value) => setDefault("http_backend_addr", value)} />
+      </SimpleGrid>
+    </Stack></Accordion.Panel></Accordion.Item>
+
+    <Accordion.Item value="transport"><Accordion.Control>Transport and relay</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <TextField label="NATS URL" value={text(defaults.nats_url)} onChange={(value) => setDefault("nats_url", value)} hint="Direct tls:// is the default; wss:// is opt-in" />
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
         <SelectField label="Relay mode" value={text(defaults.relay_mode) || "auto"} options={["auto", "buffered", "splice"]} onChange={(value) => setDefault("relay_mode", value)} />
         <NumberField label="Claim acknowledgement" suffix=" ms" value={number(defaults.claim_ack_timeout_ms, 1500)} onChange={(value) => setDefault("claim_ack_timeout_ms", value)} />
       </SimpleGrid>
-    </Stack></Fieldset>
-    <Fieldset className="config-group" legend="Authentik internals"><Stack gap="sm">
+    </Stack></Accordion.Panel></Accordion.Item>
+
+    <Accordion.Item value="identity"><Accordion.Control>Identity provider</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <TextField label="Token URL" value={text(oauth.token_url)} onChange={(value) => setOAuth("token_url", value)} />
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
         <TextField label="Provider client ID" value={text(oauth.provider_client_id)} onChange={(value) => setOAuth("provider_client_id", value)} />
@@ -69,15 +70,15 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
       <TextField label="Secret file placeholder" value={text(oauth.client_secret_file)} onChange={(value) => setOAuth("client_secret_file", value)} />
       <TextField label="Control plane URL" value={text(oauth.control_plane_url)} onChange={(value) => setOAuth("control_plane_url", value)} />
       <TextField label="Scopes" value={list(oauth.scopes)} onChange={(value) => setOAuth("scopes", splitList(value))} hint="Comma separated" />
-    </Stack></Fieldset>
+    </Stack></Accordion.Panel></Accordion.Item>
 
-    <Fieldset className="config-group" legend="Certificate internals"><Stack gap="sm">
+    <Accordion.Item value="certificates"><Accordion.Control>Certificates and cache</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <TextField label="Contacts" value={list(acme.contacts)} onChange={(value) => setAcme("contacts", splitList(value))} hint="Comma separated mailto addresses" />
       <TextField label="Cache directory" value={text(acme.cache_dir) || "~/.cache/lfp-pipe/acme"} onChange={(value) => setAcme("cache_dir", value)} />
       <CheckboxField label="Use production ACME" checked={bool(acme.production)} onChange={(value) => setAcme("production", value)} />
-    </Stack></Fieldset>
+    </Stack></Accordion.Panel></Accordion.Item>
 
-    {routes.flatMap((route, routeIndex) => (asRoutes(route.path_routes) as PathRoute[]).map((path, pathIndex) => ({ path, routeIndex, pathIndex }))).filter(({ path }) => Object.keys(asTable(path.authorization)).length > 0).map(({ path, routeIndex, pathIndex }) => { const authorization = asTable(path.authorization); return <Fieldset className="config-group" key={`${routeIndex}-${pathIndex}`} legend={`JWT authorization · ${text(path.path_prefix)}`}><Stack gap="sm">
+    {routes.flatMap((route, routeIndex) => (asRoutes(route.path_routes) as PathRoute[]).map((path, pathIndex) => ({ path, routeIndex, pathIndex }))).filter(({ path }) => Object.keys(asTable(path.authorization)).length > 0).map(({ path, routeIndex, pathIndex }) => { const authorization = asTable(path.authorization); return <Accordion.Item key={`${routeIndex}-${pathIndex}`} value={`jwt-${routeIndex}-${pathIndex}`}><Accordion.Control>{`JWT policy · ${text(path.path_prefix)}`}</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <TextField label="Exact issuer" value={text(authorization.issuer)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "issuer", value)} />
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
         <TextField label="Audiences" value={list(authorization.audiences)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "audiences", splitList(value))} hint="Comma separated" />
@@ -92,9 +93,9 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
         <NumberField label="Maximum stale age" suffix=" seconds" value={number(authorization.jwks_max_stale_seconds, 604800)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "jwks_max_stale_seconds", value)} />
       </SimpleGrid>
       <CheckboxField label="Forward Authorization header" checked={bool(authorization.forward_authorization)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "forward_authorization", value)} />
-    </Stack></Fieldset>; })}
+    </Stack></Accordion.Panel></Accordion.Item>; })}
 
-    </Tabs.Panel></Tabs>
+    </Accordion>
   </div>;
 }
 
@@ -110,12 +111,14 @@ function RouteEditor({ route, routeIndex, setRoute, setPath, setAuthorization, u
   const paths = asRoutes(route.path_routes) as PathRoute[];
   return <Fieldset className="config-group route-config" legend={`Route ${routeIndex + 1}`}>
     <div className="config-grid">
-      <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
       <TextField className="field-span-wide" label="Hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} />
-      <TextField label="Backend override" value={text(route.backend_addr)} onChange={(value) => setRoute(routeIndex, "backend_addr", value)} />
     </div>
     <div className="config-actions"><Button type="button" variant="light" size="xs" leftSection={<Plus size={15} />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/service", backend_addr: "127.0.0.1:8080", strip_path_prefix: true }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button><Button type="button" color="red" variant="light" size="xs" leftSection={<Trash2 size={15} />} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}>Remove route</Button></div>
     {paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
+    <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="technical"><Accordion.Control>Technical options</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+      <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
+      <TextField label="Default backend override" value={text(route.backend_addr)} onChange={(value) => setRoute(routeIndex, "backend_addr", value)} />
+    </SimpleGrid></Accordion.Panel></Accordion.Item></Accordion>
   </Fieldset>;
 }
 
@@ -125,16 +128,18 @@ function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, up
   const authorization = asTable(path.authorization);
   const protectedRoute = Object.keys(authorization).length > 0;
   return <div className="path-config"><div className="config-section-heading"><strong>Path {pathIndex + 1}</strong><ActionIcon type="button" color="red" variant="subtle" title="Remove path" onClick={() => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes).splice(pathIndex, 1); })}><Trash2 size={15} /></ActionIcon></div>
-    <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
       <TextField label="Path prefix" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} />
       <TextField label="Backend address" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} />
-      <TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} />
     </SimpleGrid>
     <Group gap="xl" className="path-options">
       <CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} />
       <CheckboxField label="Require bearer JWT" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (enabled) target.authorization = { issuer: "https://auth.example.com/application/o/provider/", audiences: ["service"], jwks_cache_file: "~/.cache/lfp-pipe/auth/jwks.json", roles_claim: "groups", required_roles: [], role_match: "any", algorithms: ["RS256"], jwks_refresh_seconds: 3600, jwks_max_stale_seconds: 604800, forward_authorization: false }; else delete target.authorization; })} />
     </Group>
-    {protectedRoute ? <div className="protected-summary">JWT policy configured in Advanced</div> : null}
+    {protectedRoute ? <div className="protected-summary">JWT policy available below</div> : null}
+    <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="request"><Accordion.Control>Request rewriting</Accordion.Control><Accordion.Panel>
+      <TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} />
+    </Accordion.Panel></Accordion.Item></Accordion>
   </div>;
 }
 

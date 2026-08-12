@@ -139,8 +139,12 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .config-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.65rem; align-items: start; }
 .field-span-wide { grid-column: span 2; }
 .field-span-full { grid-column: 1 / -1; }
-.config-tabs { width: max-content; margin-bottom: 0.75rem; }
-.config-tabs + [role="tabpanel"] { display: grid; gap: 0.85rem; }
+.config-disclosures { display: grid; gap: 0.45rem; }
+.config-disclosures .mantine-Accordion-item { border-color: var(--color-line); background: var(--field-background); }
+.config-disclosures .mantine-Accordion-control { min-height: 2.4rem; color: var(--color-text); font-size: 0.76rem; font-weight: 750; }
+.config-disclosures .mantine-Accordion-content { padding: 0.2rem 0.75rem 0.8rem; }
+.route-disclosure .mantine-Accordion-control { min-height: 2.25rem; color: var(--color-muted); font-size: 0.72rem; font-weight: 700; }
+.route-disclosure .mantine-Accordion-content { padding: 0.15rem 0.7rem 0.7rem; }
 .structured-config .mantine-InputWrapper-label { font-size: 0.69rem; font-weight: 750; letter-spacing: 0.035em; text-transform: uppercase; }
 .structured-config .mantine-Input-input { font-size: 0.78rem; }
 .structured-config .mantine-InputWrapper-description { font-size: 0.65rem; }
@@ -193,6 +197,9 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
   .submit-row { align-items: stretch; flex-direction: column; }
   .config-grid { grid-template-columns: 1fr; }
   .field-span-wide, .field-span-full { grid-column: auto; }
+  .mantine-Button-root[data-variant="light"],
+  .mantine-Button-root[data-variant="subtle"] { color: var(--color-text); background: var(--color-surface-strong); }
+  .mantine-Button-root[data-variant="filled"] { color: var(--color-brand-ink); }
 }
 
 @media (prefers-reduced-motion: reduce) {

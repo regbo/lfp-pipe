@@ -103,6 +103,10 @@ function App() {
 
   const effectiveEntitlements = useMemo(() =>
     Array.from(new Set((identity?.entitlements ?? []).map(normalizeEntitlement))).sort(), [identity]);
+  const automationPrincipals = useMemo(() => {
+    const managedUsernames = new Set(managedClients.map((client) => client.username));
+    return principals.filter((principal) => !managedUsernames.has(principal.username));
+  }, [managedClients, principals]);
 
   async function loadPrincipals() {
     setPrincipalsLoading(true); setPrincipalsError("");
@@ -330,7 +334,7 @@ http_backend_addr = "127.0.0.1:80"
           </div>
           </section>
 
-          <section className="section-card compact-card"><div className="compact-title"><div><h2>Headless clients</h2><p>Credentials for servers and automation.</p></div><Button variant="subtle" onClick={() => setShowAdvancedTools((value) => !value)}>{showAdvancedTools ? "Hide setup" : "New client"}</Button></div>
+          <section className="section-card compact-card"><div className="compact-title"><div><h2>Automation access</h2><p>Machine credentials for agents, servers, and scripts.</p></div><Button variant="subtle" onClick={() => setShowAdvancedTools((value) => !value)}>{showAdvancedTools ? "Cancel" : "New credential"}</Button></div>
           {showAdvancedTools ? <form className="compact-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}><TextInput aria-label="Client name" value={principalName} onChange={(event) => setPrincipalName(event.currentTarget.value)} placeholder="Client name" disabled={creatingPrincipal} required /><Select aria-label="Entitlement" value={principalEntitlement} onChange={(value) => setPrincipalEntitlement(value ?? "")} data={effectiveEntitlements} disabled={creatingPrincipal} required /><Button disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? "Creating…" : "Create"}</Button></form> : null}
 
           {createdPrincipal && <div className="secret-once" role="status">
@@ -342,7 +346,7 @@ http_backend_addr = "127.0.0.1:80"
           </div>}
 
           <div className="principal-list">
-            {principalsLoading ? <p className="empty-entitlement">Loading service principals…</p> : principalsError ? <p className="error">{principalsError}</p> : principals.length === 0 ? <p className="empty-entitlement">No service principals yet.</p> : principals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Existing client"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</Button></div>; })}
+            {principalsLoading ? <p className="empty-entitlement">Loading automation credentials…</p> : principalsError ? <p className="error">{principalsError}</p> : automationPrincipals.length === 0 ? <p className="empty-entitlement">No separate automation credentials. Managed device identities appear on the left.</p> : automationPrincipals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Machine credential"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</Button></div>; })}
           </div>
           <div className="list-footer"><span>{selectedPrincipals.length} selected</span><Button variant="light" leftSection={<Download size={15} />} disabled={selectedPrincipals.length === 0} onClick={() => void downloadSelectedConfigs()}>Export selected</Button></div>
           <Divider label="Temporary credential" labelPosition="left" />
