@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	jwt "github.com/nats-io/jwt/v2"
@@ -21,8 +22,10 @@ import (
 
 // Service owns the NATS connection and Auth Callout endpoint.
 type Service struct {
-	nats    *nats.Conn
-	callout *callout.AuthorizationService
+	nats     *nats.Conn
+	callout  *callout.AuthorizationService
+	close    sync.Once
+	closeErr error
 }
 
 // Start connects and registers a horizontally scalable Auth Callout endpoint.
@@ -77,17 +80,20 @@ func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
-	var errs []error
-	if s.callout != nil {
-		errs = append(errs, s.callout.Stop())
-	}
-	if s.nats != nil {
-		if err := s.nats.Drain(); err != nil {
-			errs = append(errs, err)
+	s.close.Do(func() {
+		var errs []error
+		if s.callout != nil {
+			errs = append(errs, s.callout.Stop())
 		}
-		s.nats.Close()
-	}
-	return errors.Join(errs...)
+		if s.nats != nil {
+			if err := s.nats.Drain(); err != nil {
+				errs = append(errs, err)
+			}
+			s.nats.Close()
+		}
+		s.closeErr = errors.Join(errs...)
+	})
+	return s.closeErr
 }
 
 func authorize(req *jwt.AuthorizationRequest, cfg config.Config, tickets *ticket.Signer, issuer nkeys.KeyPair) (string, error) {
