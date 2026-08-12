@@ -4,6 +4,8 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY tsconfig.json ./
 COPY src ./src
+COPY assets ./assets
+COPY tools ./tools
 RUN bun run typecheck && bun run build
 
 FROM nginx:1.29.1-alpine
