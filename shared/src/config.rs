@@ -26,7 +26,7 @@
 //!
 //! [defaults.acme]
 //! contacts = ["mailto:admin@example.com"]
-//! cache_dir = "/var/lib/lfp-pipe/acme"
+//! cache_dir = "~/.cache/lfp-pipe/acme"
 //! production = false
 //!
 //! [[routes]]
@@ -44,6 +44,22 @@ use std::{collections::HashSet, fs, path::Path};
 use anyhow::Context;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+/// Minimal bootstrap document for centrally managed client configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CentralClientBootstrap {
+    /// Browser-visible management origin serving the authorized configuration.
+    pub control_plane_url: String,
+    /// Select centrally managed configuration instead of local route entries.
+    #[serde(default)]
+    pub control_plane_config: bool,
+    /// Authentik service-account username; environment or CLI may provide it.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// File containing the Authentik service-account app password.
+    #[serde(default)]
+    pub client_secret_file: Option<String>,
+}
 
 /// Public-server configuration loaded from TOML and optional CLI overrides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +236,7 @@ pub struct ClientAuthorizationConfig {
     #[serde(default)]
     pub jwks_uri: Option<String>,
     /// Persistent JWKS cache used when discovery or Authentik is unavailable.
+    #[serde(default = "default_jwks_cache_file")]
     pub jwks_cache_file: String,
     /// Dot-separated claim path containing a string or array of role names.
     #[serde(default = "default_roles_claim")]
@@ -300,6 +317,7 @@ pub struct ClientAcmeConfig {
     #[serde(default)]
     pub contacts: Vec<String>,
     /// Persistent directory containing ACME account keys and certificates.
+    #[serde(default = "default_acme_cache_dir")]
     pub cache_dir: String,
     /// Use Let's Encrypt production instead of its rate-limit-safe staging CA.
     #[serde(default)]
@@ -672,6 +690,14 @@ fn default_jwt_leeway_seconds() -> u64 {
     30
 }
 
+fn default_jwks_cache_file() -> String {
+    "~/.cache/lfp-pipe/auth/jwks.json".to_string()
+}
+
+fn default_acme_cache_dir() -> String {
+    "~/.cache/lfp-pipe/acme".to_string()
+}
+
 fn default_jwks_refresh_seconds() -> u64 {
     3_600
 }
@@ -749,6 +775,31 @@ pub fn load_client_configs(path: &Path) -> anyhow::Result<Vec<ClientConfig>> {
         .with_context(|| format!("failed to read client config {}", path.display()))?;
     parse_client_configs(&raw)
         .with_context(|| format!("failed to parse client config {}", path.display()))
+}
+
+/// Detect the small bootstrap shape used by remote-managed desktop clients.
+pub fn load_central_client_bootstrap(
+    path: &Path,
+) -> anyhow::Result<Option<CentralClientBootstrap>> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read client config {}", path.display()))?;
+    let value: toml::Value = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse client config {}", path.display()))?;
+    let enabled = value
+        .get("control_plane_config")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+    let bootstrap = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse central bootstrap {}", path.display()))?;
+    Ok(Some(bootstrap))
+}
+
+/// Parse a client configuration document received from the control plane.
+pub fn parse_client_config_document(raw: &str) -> anyhow::Result<Vec<ClientConfig>> {
+    parse_client_configs(raw)
 }
 
 fn parse_client_configs(raw: &str) -> anyhow::Result<Vec<ClientConfig>> {
@@ -980,7 +1031,10 @@ fn merge_authorization_defaults(
         jwks_uri: route
             .and_then(|settings| settings.jwks_uri.clone())
             .or_else(|| defaults.and_then(|settings| settings.jwks_uri.clone())),
-        jwks_cache_file: string_value(|settings| &settings.jwks_cache_file, "jwks_cache_file")?,
+        jwks_cache_file: route
+            .and_then(|settings| settings.jwks_cache_file.clone())
+            .or_else(|| defaults.and_then(|settings| settings.jwks_cache_file.clone()))
+            .unwrap_or_else(default_jwks_cache_file),
         roles_claim: route
             .and_then(|settings| settings.roles_claim.clone())
             .or_else(|| defaults.and_then(|settings| settings.roles_claim.clone()))
@@ -1038,7 +1092,7 @@ fn merge_acme_defaults(
     let cache_dir = route
         .and_then(|settings| settings.cache_dir.clone())
         .or_else(|| defaults.and_then(|settings| settings.cache_dir.clone()))
-        .context("acme.cache_dir is required in the route or [defaults.acme]")?;
+        .unwrap_or_else(default_acme_cache_dir);
     anyhow::ensure!(
         !cache_dir.trim().is_empty(),
         "acme.cache_dir cannot be empty"

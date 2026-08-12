@@ -4,15 +4,21 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
     thread,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
-use shared::{cli::DesktopMode, config::ClientConfig};
+use notify::{RecursiveMode, Watcher};
+use shared::{
+    cli::DesktopMode,
+    config::{CentralClientBootstrap, ClientConfig},
+};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
 };
 use winit::{
     application::ApplicationHandler,
@@ -23,13 +29,18 @@ use winit::{
 
 const OPEN_CONFIG_ID: &str = "open-config";
 const OPEN_FOLDER_ID: &str = "open-config-folder";
-const RELOAD_ID: &str = "reload-config";
+const START_BOOT_ID: &str = "start-at-boot";
+const REMOTE_MANAGED_ID: &str = "remote-managed";
+const MANAGE_ID: &str = "manage";
+const MANAGEMENT_URL_ID: &str = "management-url";
 const EXIT_ID: &str = "exit";
 
 #[derive(Debug)]
 enum UserEvent {
     Menu(MenuEvent),
     RuntimeStopped(String),
+    ConfigStatus(Option<String>),
+    ConfigChanged,
 }
 
 /// Return whether the selected desktop mode should start a tray event loop.
@@ -68,7 +79,11 @@ fn desktop_session_available() -> bool {
 ///
 /// Returns an error when the desktop event loop or tray icon cannot be
 /// initialized. Runtime failures remain visible in the tray for inspection.
-pub fn run(configs: Vec<ClientConfig>, config_path: PathBuf) -> anyhow::Result<()> {
+pub fn run(
+    configs: Vec<ClientConfig>,
+    config_path: PathBuf,
+    central: Option<CentralClientBootstrap>,
+) -> anyhow::Result<()> {
     let route_count = configs.len();
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -79,12 +94,46 @@ pub fn run(configs: Vec<ClientConfig>, config_path: PathBuf) -> anyhow::Result<(
     }));
 
     let runtime_proxy = event_loop.create_proxy();
+    let desktop_settings = crate::desktop_settings::load_or_create()?;
+    let managed_central =
+        central.is_some() || (configs.is_empty() && desktop_settings.remote_managed);
     thread::Builder::new()
         .name("lfp-pipe-runtime".into())
         .spawn(move || {
             let result = tokio::runtime::Runtime::new()
                 .context("initialize async runtime")
-                .and_then(|runtime| runtime.block_on(crate::run_all(configs)));
+                .and_then(|runtime| {
+                    let bootstrap = if let Some(bootstrap) = central {
+                        Some(bootstrap)
+                    } else if configs.is_empty()
+                        && crate::desktop_settings::load_or_create()?.remote_managed
+                    {
+                        let mut settings = crate::desktop_settings::load_or_create()?;
+                        if crate::desktop_settings::central_bootstrap(&settings).is_none() {
+                            let _ = runtime_proxy.send_event(UserEvent::ConfigStatus(Some(
+                                "Enrollment required · approve in browser".into(),
+                            )));
+                            runtime.block_on(crate::desktop_settings::enroll(&mut settings))?;
+                        }
+                        crate::desktop_settings::central_bootstrap(&settings)
+                    } else if configs.is_empty() {
+                        return Ok(());
+                    } else {
+                        None
+                    };
+                    if let Some(bootstrap) = bootstrap {
+                        let proxy = runtime_proxy.clone();
+                        let reporter = Arc::new(move |message: Option<String>| {
+                            let _ = proxy.send_event(UserEvent::ConfigStatus(message));
+                        });
+                        runtime.block_on(crate::config_source::run_central_with_reporter(
+                            bootstrap,
+                            Some(reporter),
+                        ))
+                    } else {
+                        runtime.block_on(crate::run_all(configs))
+                    }
+                });
             let message = match result {
                 Ok(()) => "Tunnel runtime stopped".to_string(),
                 Err(error) => format!("Tunnel stopped: {error:#}"),
@@ -93,10 +142,38 @@ pub fn run(configs: Vec<ClientConfig>, config_path: PathBuf) -> anyhow::Result<(
         })
         .context("start tunnel runtime thread")?;
 
-    let mut app = TrayApplication::new(config_path, route_count)?;
+    let watch_proxy = event_loop.create_proxy();
+    let mut watcher = if managed_central {
+        None
+    } else {
+        let watched_path = absolute_path(&config_path);
+        let watched_directory = watched_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if event.is_ok_and(|event| {
+                    event
+                        .paths
+                        .iter()
+                        .any(|path| absolute_path(path) == watched_path)
+                }) {
+                    let _ = watch_proxy.send_event(UserEvent::ConfigChanged);
+                }
+            })
+            .context("initialize config watcher")?;
+        watcher
+            .watch(&watched_directory, RecursiveMode::NonRecursive)
+            .context("watch client config")?;
+        Some(watcher)
+    };
+    let mut app = TrayApplication::new(config_path, route_count, managed_central)?;
     event_loop
         .run_app(&mut app)
-        .context("run desktop event loop")
+        .context("run desktop event loop")?;
+    drop(watcher.take());
+    Ok(())
 }
 
 struct TrayApplication {
@@ -104,19 +181,61 @@ struct TrayApplication {
     status: MenuItem,
     tray: Option<TrayIcon>,
     menu: Menu,
+    start_at_boot: CheckMenuItem,
+    remote_managed: CheckMenuItem,
+    managed_central: bool,
+    route_count: usize,
+    last_change: Option<std::time::Instant>,
 }
 
 impl TrayApplication {
-    fn new(config_path: PathBuf, route_count: usize) -> anyhow::Result<Self> {
-        let status = MenuItem::with_id(
-            "status",
-            format!("Running · {route_count} route(s)"),
-            false,
+    fn new(
+        config_path: PathBuf,
+        route_count: usize,
+        managed_central: bool,
+    ) -> anyhow::Result<Self> {
+        let settings = crate::desktop_settings::load_or_create()?;
+        let initial_status = if managed_central {
+            "Running · centrally managed".to_string()
+        } else {
+            format!("Running · {route_count} route(s)")
+        };
+        let status = MenuItem::with_id("status", initial_status, false, None);
+        let open_config = MenuItem::with_id(
+            OPEN_CONFIG_ID,
+            "Open local config (advanced)",
+            !managed_central,
             None,
         );
-        let open_config = MenuItem::with_id(OPEN_CONFIG_ID, "Open Config", true, None);
-        let open_folder = MenuItem::with_id(OPEN_FOLDER_ID, "Open Config Folder", true, None);
-        let reload = MenuItem::with_id(RELOAD_ID, "Reload Config", true, None);
+        let open_folder = MenuItem::with_id(
+            OPEN_FOLDER_ID,
+            "Open local config folder",
+            !managed_central,
+            None,
+        );
+        let auto_launch = crate::desktop_settings::auto_launch()?;
+        let start_at_boot = CheckMenuItem::with_id(
+            START_BOOT_ID,
+            "Start at boot",
+            true,
+            auto_launch.is_enabled().unwrap_or(false),
+            None,
+        );
+        let remote_managed = CheckMenuItem::with_id(
+            REMOTE_MANAGED_ID,
+            "Remote managed",
+            true,
+            managed_central,
+            None,
+        );
+        let manage = MenuItem::with_id(
+            MANAGE_ID,
+            format!("Manage · {}", settings.control_plane_url),
+            true,
+            None,
+        );
+        let management_url =
+            MenuItem::with_id(MANAGEMENT_URL_ID, "Change management server…", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "Exit lfp-pipe", true, None);
         let separator_before_actions = PredefinedMenuItem::separator();
         let separator_before_exit = PredefinedMenuItem::separator();
@@ -125,7 +244,10 @@ impl TrayApplication {
             &separator_before_actions,
             &open_config,
             &open_folder,
-            &reload,
+            &start_at_boot,
+            &remote_managed,
+            &manage,
+            &management_url,
             &separator_before_exit,
             &exit,
         ])
@@ -135,6 +257,11 @@ impl TrayApplication {
             status,
             tray: None,
             menu,
+            start_at_boot,
+            remote_managed,
+            managed_central,
+            route_count,
+            last_change: None,
         })
     }
 
@@ -149,9 +276,83 @@ impl TrayApplication {
                     .to_path_buf();
                 self.open_path(folder);
             }
-            RELOAD_ID => match restart_current_process(&self.config_path) {
-                Ok(()) => event_loop.exit(),
-                Err(error) => self.set_error(format!("Reload failed: {error:#}")),
+            START_BOOT_ID => {
+                let result = crate::desktop_settings::auto_launch().and_then(|auto| {
+                    if self.start_at_boot.is_checked() {
+                        auto.enable()?;
+                    } else {
+                        auto.disable()?;
+                    }
+                    Ok(())
+                });
+                match result {
+                    Ok(()) => {}
+                    Err(error) => {
+                        self.start_at_boot
+                            .set_checked(!self.start_at_boot.is_checked());
+                        self.set_error(format!("Start at boot failed: {error:#}"));
+                    }
+                }
+            }
+            REMOTE_MANAGED_ID => {
+                match crate::desktop_settings::load_or_create()
+                    .and_then(|mut settings| {
+                        settings.remote_managed = self.remote_managed.is_checked();
+                        crate::desktop_settings::save(&settings)
+                    })
+                    .and_then(|()| {
+                        if self.remote_managed.is_checked() {
+                            restart_without_local_config()
+                        } else {
+                            restart_current_process()
+                        }
+                    }) {
+                    Ok(()) => event_loop.exit(),
+                    Err(error) => {
+                        self.remote_managed
+                            .set_checked(!self.remote_managed.is_checked());
+                        self.set_error(format!("Remote management failed: {error:#}"));
+                    }
+                }
+            }
+            MANAGE_ID => match crate::desktop_settings::load_or_create() {
+                Ok(settings) => {
+                    if let Err(error) = open::that_detached(settings.control_plane_url) {
+                        self.set_error(format!("Open management failed: {error:#}"));
+                    }
+                }
+                Err(error) => self.set_error(format!("Open management failed: {error:#}")),
+            },
+            MANAGEMENT_URL_ID => match crate::desktop_settings::load_or_create() {
+                Ok(mut settings) => {
+                    if let Some(value) = tinyfiledialogs::input_box(
+                        "LFP Connect Pipe",
+                        "Management server URL",
+                        &settings.control_plane_url,
+                    ) {
+                        if url::Url::parse(&value).is_err() {
+                            self.set_error("Management server must be a valid URL".into());
+                        } else {
+                            settings.control_plane_url = value;
+                            if let Err(error) =
+                                crate::desktop_settings::save(&settings).and_then(|()| {
+                                    if self.remote_managed.is_checked() {
+                                        restart_without_local_config()
+                                    } else {
+                                        restart_current_process()
+                                    }
+                                })
+                            {
+                                self.set_error(format!(
+                                    "Management server update failed: {error:#}"
+                                ));
+                            } else {
+                                event_loop.exit();
+                            }
+                        }
+                    }
+                }
+                Err(error) => self.set_error(format!("Management server update failed: {error:#}")),
             },
             EXIT_ID => event_loop.exit(),
             _ => {}
@@ -168,6 +369,39 @@ impl TrayApplication {
         self.status.set_text(&message);
         if let Some(tray) = &self.tray {
             let _ = tray.set_tooltip(Some(&message));
+        }
+    }
+
+    fn clear_config_warning(&mut self) {
+        let message = if self.managed_central {
+            "Running · centrally managed".to_string()
+        } else {
+            format!("Running · {} route(s)", self.route_count)
+        };
+        self.status.set_text(&message);
+        if let Some(tray) = &self.tray {
+            let _ = tray.set_tooltip(Some("lfp-pipe client · running"));
+        }
+    }
+
+    fn config_changed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.managed_central {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .last_change
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(300))
+        {
+            return;
+        }
+        self.last_change = Some(now);
+        match shared::config::load_client_configs(&self.config_path) {
+            Ok(_) => match restart_current_process() {
+                Ok(()) => event_loop.exit(),
+                Err(error) => self.set_error(format!("Config warning: {error:#}")),
+            },
+            Err(error) => self.set_error(format!("Config warning: {error:#}")),
         }
     }
 }
@@ -194,6 +428,9 @@ impl ApplicationHandler<UserEvent> for TrayApplication {
         match event {
             UserEvent::Menu(event) => self.handle_menu(event_loop, &event.id),
             UserEvent::RuntimeStopped(message) => self.set_error(message),
+            UserEvent::ConfigStatus(Some(message)) => self.set_error(message),
+            UserEvent::ConfigStatus(None) => self.clear_config_warning(),
+            UserEvent::ConfigChanged => self.config_changed(event_loop),
         }
     }
 
@@ -206,15 +443,45 @@ impl ApplicationHandler<UserEvent> for TrayApplication {
     }
 }
 
-fn restart_current_process(config_path: &Path) -> anyhow::Result<()> {
-    // Validate the source file before replacing a healthy process. CLI and
-    // environment overrides are applied again by the replacement process.
-    shared::config::load_client_configs(config_path).context("validate config before reload")?;
+fn absolute_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(path)
+        }
+    })
+}
+
+fn restart_current_process() -> anyhow::Result<()> {
     let executable = env::current_exe().context("locate current executable")?;
     Command::new(executable)
         .args(env::args_os().skip(1))
         .spawn()
         .context("start replacement process")?;
+    Ok(())
+}
+
+fn restart_without_local_config() -> anyhow::Result<()> {
+    let executable = env::current_exe().context("locate current executable")?;
+    let mut args = env::args_os().skip(1).peekable();
+    let mut filtered = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            let _ = args.next();
+            continue;
+        }
+        if !arg.to_string_lossy().starts_with("--config=") {
+            filtered.push(arg);
+        }
+    }
+    Command::new(executable)
+        .args(filtered)
+        .env_remove("LFP_PIPE_CONFIG")
+        .spawn()
+        .context("start remotely managed replacement")?;
     Ok(())
 }
 

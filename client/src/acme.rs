@@ -45,7 +45,8 @@ impl AcmeRuntime {
             !matches!(relay_mode, RelayMode::Splice),
             "automatic TLS termination cannot use splice relay mode; use auto or buffered"
         );
-        let cache_dir = domain_cache_dir(Path::new(&config.cache_dir), &config.domain);
+        let cache_root = crate::paths::expand_home(&config.cache_dir)?;
+        let cache_dir = domain_cache_dir(&cache_root, &config.domain);
         prepare_cache_dir(&cache_dir)?;
         let (sender, receiver) = mpsc::channel(64);
         tokio::spawn(async move {

@@ -47,7 +47,6 @@ type BrandConfig struct {
 	Color       string `json:"color"`
 	ColorStrong string `json:"color_strong"`
 	Ink         string `json:"ink"`
-	Canvas      string `json:"canvas"`
 }
 
 // Load resolves environment values and reads secret material from *_FILE paths.
@@ -68,18 +67,17 @@ func LoadArgs(args []string) (Config, error) {
 		AuthentikApplicationSlug: envOr("LFP_AUTH_AUTHENTIK_APPLICATION_SLUG", "lfp-pipe"),
 		OAuthTokenURL:            os.Getenv("LFP_AUTH_OAUTH_TOKEN_URL"),
 		NATSURLs:                 splitCSV(envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222")),
-		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222"))),
+		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "tls://pipe.lfpconnect.io:4222"))),
 		NATSCalloutUser:          envOr("LFP_AUTH_NATS_CALLOUT_USER", "auth-svc"),
 		NATSTunnelAccount:        envOr("LFP_AUTH_NATS_TUNNEL_ACCOUNT", "TUNNELS"),
 		NATSRequestSubjectPrefix: envOr("LFP_AUTH_NATS_SUBJECT_PREFIX", "lfp.v1.connect"),
 		Brand: BrandConfig{
 			Name:        envOr("LFP_AUTH_BRAND_NAME", "LFP Connect"),
-			LogoURL:     envOr("LFP_AUTH_BRAND_LOGO_URL", "/assets/lfp-connect-reversed.svg"),
+			LogoURL:     envOr("LFP_AUTH_BRAND_LOGO_URL", "/assets/lfp-connect-auto.svg"),
 			FaviconURL:  envOr("LFP_AUTH_BRAND_FAVICON_URL", "/assets/lfp-favicon.svg"),
 			Color:       envOr("LFP_AUTH_BRAND_COLOR", "#ff6f61"),
 			ColorStrong: envOr("LFP_AUTH_BRAND_COLOR_STRONG", "#e85c50"),
 			Ink:         envOr("LFP_AUTH_BRAND_INK", "#0b1426"),
-			Canvas:      envOr("LFP_AUTH_BRAND_CANVAS", "#0b1426"),
 		},
 	}
 	flags := flag.NewFlagSet("lfp-connect-auth", flag.ContinueOnError)
@@ -89,7 +87,6 @@ func LoadArgs(args []string) (Config, error) {
 	flags.StringVar(&cfg.Brand.Color, "brand-color", cfg.Brand.Color, "management website primary color")
 	flags.StringVar(&cfg.Brand.ColorStrong, "brand-color-strong", cfg.Brand.ColorStrong, "management website hover color")
 	flags.StringVar(&cfg.Brand.Ink, "brand-ink", cfg.Brand.Ink, "management website foreground ink")
-	flags.StringVar(&cfg.Brand.Canvas, "brand-canvas", cfg.Brand.Canvas, "management website canvas color")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}

@@ -6,15 +6,20 @@
     "dev": "bun --hot src/index.html",
     "build": "bun build src/index.html --outdir=dist --target=browser --minify --sourcemap=linked && bun run assets",
     "assets": "bun run tools/copy-assets.ts",
+    "preview": "bun run build && bun run tools/preview.ts",
     "typecheck": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "@mantine/core": "9.5.1",
+    "@mantine/hooks": "9.5.1",
     "fflate": "^0.8.3",
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "smol-toml": "^1.8.0"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "typescript": "^5.9.2"

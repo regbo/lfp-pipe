@@ -4,9 +4,12 @@
 
 mod acme;
 mod authorization;
+pub mod config_source;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub mod desktop;
+pub mod desktop_settings;
 mod oauth;
+mod paths;
 
 use std::{
     sync::Arc,

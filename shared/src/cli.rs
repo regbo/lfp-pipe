@@ -8,12 +8,13 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::{Args, Parser};
 
 use crate::{
     config::{
-        ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides,
-        load_client_configs, load_server_config,
+        CentralClientBootstrap, ClientConfig, ClientOverrides, RelayMode, ServerConfig,
+        ServerOverrides, load_central_client_bootstrap, load_client_configs, load_server_config,
     },
     logging::DEFAULT_LOG_FILTER,
 };
@@ -50,13 +51,15 @@ pub struct ClientRuntimeConfig {
     pub config_path: PathBuf,
     /// Requested desktop integration mode.
     pub desktop_mode: DesktopMode,
+    /// Optional centrally managed bootstrap settings.
+    pub central: Option<CentralClientBootstrap>,
 }
 
 #[derive(Debug, Args)]
 struct CommonOptions {
     /// Path to the component's TOML configuration file.
     #[arg(long, env = "LFP_PIPE_CONFIG", value_name = "PATH")]
-    config: PathBuf,
+    config: Option<PathBuf>,
 
     /// Tracing directives, for example `info,server=debug`.
     #[arg(
@@ -122,7 +125,11 @@ struct ServerCli {
 
 impl ServerCli {
     fn load(self) -> anyhow::Result<RuntimeConfig<ServerConfig>> {
-        let config = load_server_config(&self.common.config)?.with_overrides(ServerOverrides {
+        let config_path = self
+            .common
+            .config
+            .context("server requires --config or LFP_PIPE_CONFIG")?;
+        let config = load_server_config(&config_path)?.with_overrides(ServerOverrides {
             public_listen: self.public_listen,
             data_listen: self.data_listen,
             advertised_data_addr: self.advertised_data_addr,
@@ -184,10 +191,22 @@ struct ClientCli {
         default_value_t = DesktopMode::Auto
     )]
     tray: DesktopMode,
+
+    /// Authentik service-account username for central configuration.
+    #[arg(long, env = "LFP_PIPE_OAUTH_USERNAME", value_name = "USERNAME")]
+    oauth_username: Option<String>,
+
+    /// Secret file for central configuration authentication.
+    #[arg(long, env = "LFP_PIPE_OAUTH_CLIENT_SECRET_FILE", value_name = "PATH")]
+    oauth_client_secret_file: Option<String>,
 }
 
 impl ClientCli {
     fn load(self) -> anyhow::Result<ClientRuntimeConfig> {
+        let config_path = self
+            .common
+            .config
+            .unwrap_or_else(|| PathBuf::from("client.toml"));
         let overrides = ClientOverrides {
             client_id: self.client_id,
             nats_url: self.nats_url,
@@ -196,7 +215,26 @@ impl ClientCli {
             request_subject: self.request_subject,
             claim_ack_timeout_ms: self.claim_ack_timeout_ms,
         };
-        let loaded = load_client_configs(&self.common.config)?;
+        let mut central = if config_path.exists() {
+            load_central_client_bootstrap(&config_path)?
+        } else {
+            None
+        };
+        if let Some(bootstrap) = &mut central {
+            bootstrap.username = self.oauth_username.or_else(|| bootstrap.username.clone());
+            bootstrap.client_secret_file = self
+                .oauth_client_secret_file
+                .or_else(|| bootstrap.client_secret_file.clone());
+        }
+        let loaded = if central.is_some() {
+            Vec::new()
+        } else {
+            if config_path.exists() {
+                load_client_configs(&config_path)?
+            } else {
+                Vec::new()
+            }
+        };
         anyhow::ensure!(
             loaded.len() == 1 || overrides.client_id.is_none(),
             "--client-id/LFP_PIPE_CLIENT_ID cannot override a multi-route config"
@@ -208,8 +246,9 @@ impl ClientCli {
         Ok(ClientRuntimeConfig {
             config,
             log_filter: self.common.log_filter,
-            config_path: self.common.config,
+            config_path,
             desktop_mode: self.tray,
+            central,
         })
     }
 }

@@ -13,6 +13,50 @@ struct OAuthTokenResponse {
     access_token: String,
 }
 
+/// Exchange an Authentik service-account app password for an access token.
+pub async fn obtain_access_token(
+    token_url: &str,
+    provider_client_id: &str,
+    username: &str,
+    client_secret_file: &str,
+    scopes: &[String],
+) -> anyhow::Result<String> {
+    let secret = fs::read_to_string(client_secret_file)
+        .with_context(|| format!("failed to read OAuth client secret file {client_secret_file}"))?;
+    ensure!(
+        !secret.trim().is_empty(),
+        "OAuth client secret file is empty"
+    );
+    let scope = scopes.join(" ");
+    let response = Client::new()
+        .post(token_url)
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", provider_client_id),
+            ("username", username),
+            ("password", secret.trim()),
+            ("scope", scope.as_str()),
+        ])
+        .send()
+        .await
+        .context("request Authentik OAuth token")?;
+    if !response.status().is_success() {
+        return Err(anyhow!(
+            "Authentik OAuth token request returned {}",
+            response.status()
+        ));
+    }
+    let access: OAuthTokenResponse = response
+        .json()
+        .await
+        .context("decode Authentik OAuth token response")?;
+    ensure!(
+        !access.access_token.is_empty(),
+        "Authentik returned an empty token"
+    );
+    Ok(access.access_token)
+}
+
 #[derive(Debug, Serialize)]
 struct TicketRequest<'a> {
     hostname: &'a str,
@@ -54,49 +98,24 @@ pub async fn obtain_ticket(
     config: &ClientOAuthConfig,
     client_name: &str,
 ) -> anyhow::Result<OAuthTicket> {
-    let secret = fs::read_to_string(&config.client_secret_file).with_context(|| {
-        format!(
-            "failed to read OAuth client secret file {}",
-            config.client_secret_file
-        )
-    })?;
-    ensure!(
-        !secret.trim().is_empty(),
-        "OAuth client secret file is empty"
-    );
     let http = Client::builder()
         .build()
         .context("construct OAuth HTTP client")?;
-    let scope = config.scopes.join(" ");
-    let token_response = http
-        .post(&config.token_url)
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", config.provider_client_id.as_str()),
-            ("username", config.username.as_str()),
-            ("password", secret.trim()),
-            ("scope", scope.as_str()),
-        ])
-        .send()
-        .await
-        .context("request Authentik OAuth token")?;
-    if !token_response.status().is_success() {
-        return Err(anyhow!(
-            "Authentik OAuth token request returned {}",
-            token_response.status()
-        ));
-    }
-    let access: OAuthTokenResponse = token_response
-        .json()
-        .await
-        .context("decode Authentik OAuth token response")?;
+    let access_token = obtain_access_token(
+        &config.token_url,
+        &config.provider_client_id,
+        &config.username,
+        &config.client_secret_file,
+        &config.scopes,
+    )
+    .await?;
 
     let ticket_response = http
         .post(format!(
             "{}/api/tunnel-tokens",
             config.control_plane_url.trim_end_matches('/')
         ))
-        .bearer_auth(access.access_token)
+        .bearer_auth(access_token)
         .json(&TicketRequest {
             hostname: &config.hostname,
             client_name,

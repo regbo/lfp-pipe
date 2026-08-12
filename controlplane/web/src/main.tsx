@@ -1,23 +1,39 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
 import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
+import { Badge, Button, Checkbox, Divider, Group, Input, MantineProvider, Select, TextInput, createTheme } from "@mantine/core";
+import { ConfigEditor } from "./config-editor";
+import "@mantine/core/styles.css";
 import "./styles.css";
+
+const theme = createTheme({
+  primaryColor: "coral",
+  defaultRadius: "md",
+  fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+  colors: { coral: ["#fff1ef", "#ffe2de", "#ffc4bd", "#ffa59b", "#ff877b", "#ff6f61", "#e85c50", "#c9473d", "#a93730", "#872b26"] },
+  components: {
+    TextInput: TextInput.extend({ defaultProps: { size: "xs" } }),
+    Select: Select.extend({ defaultProps: { size: "xs", allowDeselect: false } }),
+    Button: Button.extend({ defaultProps: { size: "xs" } }),
+    InputWrapper: Input.Wrapper.extend({ defaultProps: { inputWrapperOrder: ["label", "input", "description", "error"] } }),
+  },
+});
 
 type BrandSettings = {
   name: string; logo_url: string; favicon_url: string; color: string;
-  color_strong: string; ink: string; canvas: string;
+  color_strong: string; ink: string;
 };
 
 const defaultBrand: BrandSettings = {
-  name: "LFP Connect", logo_url: "/assets/lfp-connect-reversed.svg",
+  name: "LFP Connect", logo_url: "/assets/lfp-connect-auto.svg",
   favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61",
-  color_strong: "#e85c50", ink: "#0b1426", canvas: "#0b1426",
+  color_strong: "#e85c50", ink: "#0b1426",
 };
 
 type Identity = {
   subject: string; name: string; email: string; entitlements: string[];
-  required_entitlement: string; route_pattern: string;
+  required_entitlement: string; route_pattern: string; control_plane_url: string;
 };
 
 type TunnelToken = {
@@ -28,13 +44,14 @@ type TunnelToken = {
 type ServicePrincipal = { id: number; username: string; name: string; client_id: string; entitlement: string };
 type OAuthSettings = { token_url: string; client_id: string; control_plane_url: string; scopes: string[]; nats_urls: string[] };
 type CreatedPrincipal = { service_principal: ServicePrincipal; client_secret: string; oauth: OAuthSettings };
+type ManagedClient = { username: string; name: string; version: string; platform: string; last_seen: string; online?: boolean };
+type Enrollment = { code: string; device_id: string; name: string; platform: string; version: string; expires_at: string };
 
 function applyBrand(brand: BrandSettings) {
   const root = document.documentElement.style;
   root.setProperty("--color-brand", brand.color);
   root.setProperty("--color-brand-strong", brand.color_strong);
   root.setProperty("--color-brand-ink", brand.ink);
-  root.setProperty("--color-canvas", brand.canvas);
   document.title = `${brand.name} Pipe`;
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   if (favicon) favicon.href = brand.favicon_url;
@@ -74,6 +91,15 @@ function App() {
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [copied, setCopied] = useState("");
+  const [selectedPrincipals, setSelectedPrincipals] = useState<number[]>([]);
+  const [editingPrincipal, setEditingPrincipal] = useState<ServicePrincipal | null>(null);
+  const [centralConfig, setCentralConfig] = useState("");
+  const [configSaving, setConfigSaving] = useState(false);
+  const [saveState, setSaveState] = useState("Saved");
+  const [managedClients, setManagedClients] = useState<ManagedClient[]>([]);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+  const skipNextConfigSave = useRef(false);
 
   const effectiveEntitlements = useMemo(() =>
     Array.from(new Set((identity?.entitlements ?? []).map(normalizeEntitlement))).sort(), [identity]);
@@ -86,6 +112,14 @@ function App() {
     } catch (cause) {
       setPrincipalsError(cause instanceof Error ? cause.message : "Service principals could not be loaded.");
     } finally { setPrincipalsLoading(false); }
+  }
+
+  async function loadDevices() {
+    const [clients, pending] = await Promise.all([
+      api<{ managed_clients: ManagedClient[] }>("/api/managed-clients"),
+      api<{ enrollments: Enrollment[] }>("/api/enrollments"),
+    ]);
+    setManagedClients(clients.managed_clients); setEnrollments(pending.enrollments);
   }
 
   useEffect(() => {
@@ -101,6 +135,9 @@ function App() {
       })
       .catch(() => undefined);
     void loadPrincipals();
+    void loadDevices();
+    const deviceTimer = window.setInterval(() => void loadDevices(), 15000);
+    return () => window.clearInterval(deviceTimer);
   }, []);
 
   const requestedHostname = identity && hostname ? `${hostname}.${identity.required_entitlement}` : "";
@@ -150,6 +187,76 @@ function App() {
   async function copy(label: string, value: string) {
     await navigator.clipboard.writeText(value); setCopied(label);
     window.setTimeout(() => setCopied(""), 1800);
+  }
+
+  function togglePrincipal(id: number) {
+    setSelectedPrincipals((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  }
+
+  async function editConfig(principal: ServicePrincipal) {
+    setError("");
+    try {
+      const response = await api<{ config_toml: string }>(`/api/service-principals/${principal.id}/config`);
+      skipNextConfigSave.current = true;
+      setCentralConfig(response.config_toml);
+      setEditingPrincipal(principal);
+      setSaveState("Saved");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Configuration could not be loaded."); }
+  }
+
+  async function saveConfig() {
+    if (!editingPrincipal) return;
+    setConfigSaving(true); setSaveState("Saving…"); setError("");
+    try {
+      await api(`/api/service-principals/${editingPrincipal.id}/config`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config_toml: centralConfig }),
+      });
+      setSaveState("Saved");
+    } catch (cause) { setSaveState("Save failed"); setError(cause instanceof Error ? cause.message : "Configuration could not be saved."); }
+    finally { setConfigSaving(false); }
+  }
+
+  useEffect(() => {
+    if (!editingPrincipal || !centralConfig) return;
+    if (skipNextConfigSave.current) { skipNextConfigSave.current = false; return; }
+    setSaveState("Unsaved changes");
+    const timer = window.setTimeout(() => void saveConfig(), 900);
+    return () => window.clearTimeout(timer);
+  }, [centralConfig]);
+
+  async function claimEnrollment(enrollment: Enrollment) {
+    setError("");
+    const claimed = await api<{ service_principal: ServicePrincipal }>(`/api/enrollments/${enrollment.code}/claim`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entitlement: principalEntitlement }) });
+    const principal = claimed.service_principal;
+    setEnrollments((current) => current.filter((candidate) => candidate.code !== enrollment.code));
+    setPrincipals((current) => current.some((candidate) => candidate.id === principal.id) ? current : [...current, principal]);
+    setManagedClients((current) => current.some((client) => client.username === principal.username) ? current : [...current, { username: principal.username, name: enrollment.name, version: enrollment.version, platform: enrollment.platform, last_seen: new Date().toISOString(), online: false }]);
+    await editConfig(principal);
+  }
+
+  async function manageClient(client: ManagedClient) {
+    const principal = principals.find((candidate) => candidate.username === client.username);
+    if (!principal) { setError("This client is connected but its managed configuration is not available yet."); return; }
+    await editConfig(principal);
+  }
+
+  function exportCurrentConfig() {
+    if (!editingPrincipal) return;
+    const url = URL.createObjectURL(new Blob([centralConfig], { type: "application/toml" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = `${editingPrincipal.client_id}.toml`; anchor.click(); URL.revokeObjectURL(url);
+  }
+
+  async function downloadSelectedConfigs() {
+    const selected = principals.filter((principal) => selectedPrincipals.includes(principal.id));
+    const documents = await Promise.all(selected.map(async (principal) => ({
+      principal,
+      response: await api<{ config_toml: string }>(`/api/service-principals/${principal.id}/config`),
+    })));
+    const archive = zipSync(Object.fromEntries(documents.map(({ principal, response }) => [
+      `${principal.client_id || principal.username}.toml`, strToU8(response.config_toml),
+    ])));
+    const url = URL.createObjectURL(new Blob([archive], { type: "application/zip" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = "lfp-pipe-selected-configs.zip"; anchor.click(); URL.revokeObjectURL(url);
   }
 
   function downloadBundle(created: CreatedPrincipal) {
@@ -205,53 +312,47 @@ http_backend_addr = "127.0.0.1:80"
 
   return (
     <div className="shell">
-      <header className="topbar"><Brand settings={brand} /><button className="button secondary compact" onClick={logout}><LogOut size={16} /><span>Sign out</span></button></header>
+      <header className="topbar"><Brand settings={brand} /><Button variant="subtle" leftSection={<LogOut size={16} />} onClick={logout}><span>Sign out</span></Button></header>
       <main className="main"><section className="dashboard">
-        <div className="dashboard-header">
-          <div><span className="eyebrow">Pipe</span><h1>Route console</h1></div>
+        <div className="dashboard-header compact-header">
+          <div><span className="eyebrow">LFP Pipe</span><h1>Connections</h1></div>
           <div className="identity"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></div>
         </div>
 
-        <div className="dashboard-grid">
-          <form className="section-card" onSubmit={issue}>
-            <div className="section-title"><span className="icon-box"><KeyRound size={20} /></span><div><h2>Issue temporary credential</h2><p>One client and one exact route.</p></div></div>
-            <div className="fields">
-              <div className="field"><label htmlFor="client-name">Tunnel client</label><input id="client-name" value={clientName} onChange={(event) => setClientName(event.target.value)} placeholder="regbodesktop" autoComplete="off" required /></div>
-              <div className="field"><label htmlFor="hostname">Subdomain</label><div className="input-suffix"><input id="hostname" value={hostname} onChange={(event) => setHostname(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} placeholder="regbodesktop" autoComplete="off" required /><span>.{identity.required_entitlement}</span></div></div>
-            </div>
-            <div className="submit-row"><span className="helper">Short-lived credential</span><button className="button" disabled={!matchedEntitlement || working}>{working ? "Issuing…" : "Issue credential"}<ArrowRight size={17} /></button></div>
-            {issued && <div className="token-result"><div className="token-result-head"><div><strong>{issued.hostname}</strong><br /><span>Expires {new Date(issued.expires_at).toLocaleString()}</span></div><button type="button" className="button secondary compact" onClick={() => copy("token", issued.token)}>{copied === "token" ? <Check size={15} /> : <Copy size={15} />}{copied === "token" ? "Copied" : "Copy"}</button></div><pre className="token-value">{issued.token}</pre></div>}
-          </form>
-          <aside className="section-card">
-            <div className="section-title"><span className="icon-box"><ShieldCheck size={20} /></span><div><h2>Entitlement</h2><p>Effective direct and group grants.</p></div></div>
-            {matchedEntitlement ? <div className="entitlement"><Check size={19} /><div><strong>{matchedEntitlement}</strong><span>{requestedHostname}</span></div></div> : <p className="empty-entitlement">No entitlement covers this route.</p>}
-          </aside>
-        </div>
+        <div className="console-grid">
+          <section className="section-card compact-card"><div className="compact-title"><div><h2>Managed clients</h2><p>Install, approve, then manage routes here.</p></div><Badge size="md" variant="light">{managedClients.filter((client) => client.online !== false).length} online</Badge></div>
+          <div className="device-panel flat-panel">
+            {enrollments.map((enrollment) => <div className="principal-row" key={enrollment.code}><div><strong>{enrollment.name || enrollment.device_id}</strong><span>{enrollment.platform} · {enrollment.version} · code {enrollment.code}</span></div><Button onClick={() => void claimEnrollment(enrollment)}>Approve and manage</Button></div>)}
+            {managedClients.map((client) => { const isManaging = editingPrincipal?.username === client.username; return <div className="managed-client" key={client.username}><div className="principal-row"><div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div><Group gap="xs"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button></Group></div>
+              {isManaging ? <div className="client-config-panel"><div><strong>{client.name || editingPrincipal.client_id}</strong><span>Changes save automatically and are pushed to this client.</span></div><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><Group className="config-footer" justify="space-between" align="center"><Badge color={saveState === "Saved" ? "green" : "gray"} variant="light">{saveState}</Badge><Button.Group><Button variant="light" leftSection={<Download size={16} />} onClick={exportCurrentConfig}>Export config</Button><Button variant="default" onClick={() => setEditingPrincipal(null)}>Close</Button></Button.Group></Group></div> : null}
+            </div>; })}
+            {managedClients.length === 0 && enrollments.length === 0 ? <p className="empty-entitlement">No desktop clients connected yet. Install and start the client to enroll it.</p> : null}
+          </div>
+          </section>
 
-        <section className="section-card principals-card">
-          <div className="section-title"><span className="icon-box"><Server size={20} /></span><div><h2>Service principals</h2><p>Revocable Authentik identities that renew tunnel credentials through OAuth.</p></div></div>
-          <form className="principal-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}>
-            <div className="field"><label htmlFor="principal-name">Name</label><input id="principal-name" value={principalName} onChange={(event) => setPrincipalName(event.target.value)} placeholder="desktop-speedtest" disabled={creatingPrincipal} required /></div>
-            <div className="field"><label htmlFor="principal-entitlement">Entitlement</label><select id="principal-entitlement" value={principalEntitlement} onChange={(event) => setPrincipalEntitlement(event.target.value)} disabled={creatingPrincipal} required>{effectiveEntitlements.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-            <button className="button" disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? <><LoaderCircle className="button-spinner" size={17} />Creating…</> : <>Create principal<ArrowRight size={17} /></>}</button>
-          </form>
+          <section className="section-card compact-card"><div className="compact-title"><div><h2>Headless clients</h2><p>Credentials for servers and automation.</p></div><Button variant="subtle" onClick={() => setShowAdvancedTools((value) => !value)}>{showAdvancedTools ? "Hide setup" : "New client"}</Button></div>
+          {showAdvancedTools ? <form className="compact-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}><TextInput aria-label="Client name" value={principalName} onChange={(event) => setPrincipalName(event.currentTarget.value)} placeholder="Client name" disabled={creatingPrincipal} required /><Select aria-label="Entitlement" value={principalEntitlement} onChange={(value) => setPrincipalEntitlement(value ?? "")} data={effectiveEntitlements} disabled={creatingPrincipal} required /><Button disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? "Creating…" : "Create"}</Button></form> : null}
 
           {createdPrincipal && <div className="secret-once" role="status">
             <div><strong>Copy this secret now</strong><span>It will not be shown again.</span></div>
-            <div className="credential-row"><code>{createdPrincipal.service_principal.username}</code><button className="button secondary compact" onClick={() => copy("username", createdPrincipal.service_principal.username)}>{copied === "username" ? <Check size={15} /> : <Copy size={15} />}Username</button></div>
-            <div className="credential-row"><code>{createdPrincipal.client_secret}</code><button className="button secondary compact" onClick={() => copy("secret", createdPrincipal.client_secret)}>{copied === "secret" ? <Check size={15} /> : <Copy size={15} />}Secret</button></div>
-            <div className="credential-row"><pre>{oauthExample}</pre><button className="button secondary compact" onClick={() => copy("config", oauthExample)}>{copied === "config" ? <Check size={15} /> : <Copy size={15} />}OAuth config</button></div>
-            <button className="button download-button" onClick={() => downloadBundle(createdPrincipal)}><Download size={17} />Download client bundle</button>
+            <div className="credential-row"><code>{createdPrincipal.service_principal.username}</code><Button variant="light" leftSection={copied === "username" ? <Check size={15} /> : <Copy size={15} />} onClick={() => copy("username", createdPrincipal.service_principal.username)}>Username</Button></div>
+            <div className="credential-row"><code>{createdPrincipal.client_secret}</code><Button variant="light" leftSection={copied === "secret" ? <Check size={15} /> : <Copy size={15} />} onClick={() => copy("secret", createdPrincipal.client_secret)}>Secret</Button></div>
+            <div className="credential-row"><pre>{oauthExample}</pre><Button variant="light" leftSection={copied === "config" ? <Check size={15} /> : <Copy size={15} />} onClick={() => copy("config", oauthExample)}>OAuth config</Button></div>
+            <Button className="download-button" leftSection={<Download size={17} />} onClick={() => downloadBundle(createdPrincipal)}>Download client bundle</Button>
           </div>}
 
           <div className="principal-list">
-            {principalsLoading ? <p className="empty-entitlement">Loading service principals…</p> : principalsError ? <p className="error">{principalsError}</p> : principals.length === 0 ? <p className="empty-entitlement">No service principals yet.</p> : principals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><div><strong>{principal.username}</strong><span>{principal.client_id || "Existing client"} · {principal.entitlement}</span></div><button className={`icon-button${confirming || deleting ? " confirm-delete" : ""}`} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</button></div>; })}
+            {principalsLoading ? <p className="empty-entitlement">Loading service principals…</p> : principalsError ? <p className="error">{principalsError}</p> : principals.length === 0 ? <p className="empty-entitlement">No service principals yet.</p> : principals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Existing client"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><LoaderCircle className="button-spinner" size={15} />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} />}</Button></div>; })}
           </div>
-        </section>
+          <div className="list-footer"><span>{selectedPrincipals.length} selected</span><Button variant="light" leftSection={<Download size={15} />} disabled={selectedPrincipals.length === 0} onClick={() => void downloadSelectedConfigs()}>Export selected</Button></div>
+          <Divider label="Temporary credential" labelPosition="left" />
+          <form className="temporary-credential" onSubmit={issue}><div className="compact-form"><TextInput aria-label="Tunnel client" value={clientName} onChange={(event) => setClientName(event.currentTarget.value)} placeholder="Client name" required /><TextInput aria-label="Subdomain" value={hostname} onChange={(event) => setHostname(event.currentTarget.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} placeholder="Subdomain" required /><Button disabled={!matchedEntitlement || working}>{working ? "Issuing…" : "Issue"}</Button></div><p className="helper">{matchedEntitlement ? `Authorized under ${matchedEntitlement}` : "Enter an entitled subdomain."}</p>{issued ? <Button type="button" variant="subtle" onClick={() => copy("token", issued.token)}>Copy issued token</Button> : null}</form>
+          </section>
+        </div>
         {error && <p className="error global-error" role="alert">{error}</p>}
       </section></main>
     </div>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><MantineProvider theme={theme} defaultColorScheme="auto"><App /></MantineProvider></StrictMode>);

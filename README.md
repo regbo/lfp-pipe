@@ -96,6 +96,21 @@ Configuration is layered predictably:
 CLI flag > environment variable > TOML file > typed default
 ```
 
+Desktop installs do not require a configuration file. Starting the client with
+no arguments defaults to remote management at
+`https://manage-pipe.lfpconnect.io`: the tray starts, a short-lived enrollment
+page opens, and the signed-in owner approves the device and selects its route
+entitlement. The resulting Authentik service-account credential is stored in
+the operating-system user configuration directory. From then on the client
+starts at login, appears in the management console, and receives configuration
+updates over an authenticated Server-Sent Events stream on the same HTTPS
+origin. SSE is used instead of gRPC so pushes work through ordinary HTTP reverse
+proxies and path routing without requiring a separate HTTP/2 service.
+
+TOML files, environment variables, and CLI flags remain available for headless
+servers, service supervisors, and automation. Supplying `--config` or
+`LFP_PIPE_CONFIG` explicitly selects that advanced local/headless workflow.
+
 Both programs accept `--config` / `LFP_PIPE_CONFIG` and `--log-filter` /
 `RUST_LOG`. Server overrides use these environment variables:
 
@@ -119,6 +134,8 @@ Client-specific overrides are:
 | `--relay-mode` | `LFP_PIPE_RELAY_MODE` |
 | `--request-subject` | `LFP_PIPE_REQUEST_SUBJECT` |
 | `--claim-ack-timeout-ms` | `LFP_PIPE_CLAIM_ACK_TIMEOUT_MS` |
+| `--oauth-username` | `LFP_PIPE_OAUTH_USERNAME` |
+| `--oauth-client-secret-file` | `LFP_PIPE_OAUTH_CLIENT_SECRET_FILE` |
 
 Backend rules are structured and therefore remain TOML-only. Start from
 [`server.example.toml`](server.example.toml) and
@@ -144,6 +161,21 @@ Each route gets its own OAuth ticket renewal and NATS subscription. If one
 route fails, the process exits so a service supervisor can restart the whole
 declared set instead of silently leaving only some hostnames available. The
 original flat single-route format remains supported without changes.
+
+For a client whose routes and authorization policy are managed entirely in the
+web console, the local TOML can contain only:
+
+```toml
+control_plane_url = "https://manage-pipe.lfpconnect.io"
+control_plane_config = true
+```
+
+Supply the service-principal username and protected one-time secret file with
+`LFP_PIPE_OAUTH_USERNAME` and `LFP_PIPE_OAUTH_CLIENT_SECRET_FILE` (or their CLI
+flags). The client authenticates with the Authentik client-credentials flow,
+validates every downloaded document before applying it, polls for updates, and
+keeps the last valid configuration running when the control plane is unavailable
+or returns an invalid update.
 
 ### Protect an HTTP backend with OAuth JWTs
 
@@ -180,9 +212,12 @@ proxy. The bearer header is removed before forwarding by default; set
 
 On Windows, macOS, and GTK-based Linux desktops, the client automatically adds
 an lfp-pipe system-tray icon. Its menu shows the process status and can open the
-active TOML file or its folder, validate and reload the configuration, or stop
-the client. Reload starts a replacement with the same arguments only after the
-TOML parses successfully.
+management console, toggle remote management, change the management server with
+a native text-entry dialog, toggle per-user start-at-boot, or stop the client.
+Local TOML actions are enabled only in advanced local-config mode. The parent folder is watched
+so ordinary saves and atomic editor replacements are both detected. Valid local
+changes restart the same executable with the same arguments; invalid changes
+leave the current routes running and put a warning in the tray tooltip.
 
 Use `--tray always` to require desktop integration or `--tray never` for a
 headless service. `LFP_PIPE_TRAY=auto|always|never` provides the same centralized
@@ -228,13 +263,14 @@ http_backend_addr = "127.0.0.1:8080"
 
 [defaults.acme]
 contacts = ["mailto:admin@example.com"]
-cache_dir = "/var/lib/lfp-pipe/acme"
+cache_dir = "~/.cache/lfp-pipe/acme"
 production = false
 ```
 
 Staging is the default to protect production CA rate limits. Set
 `production = true` only after the route works end to end, or set
-`directory_url` for another ACME-compatible CA. Treat `cache_dir` as secret
+`cache_dir` defaults to `~/.cache/lfp-pipe/acme`, so it can normally be omitted.
+Use `directory_url` for another ACME-compatible CA. Treat `cache_dir` as secret
 material because it contains account and certificate private keys. On Unix the
 client creates each hostname directory with mode `0700`.
 

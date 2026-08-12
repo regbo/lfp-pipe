@@ -56,6 +56,10 @@ enum Denial {
 
 impl JwtAuthorizer {
     pub(crate) async fn load(config: ClientAuthorizationConfig) -> anyhow::Result<Self> {
+        let mut config = config;
+        config.jwks_cache_file = crate::paths::expand_home(&config.jwks_cache_file)?
+            .to_string_lossy()
+            .into_owned();
         let algorithms = config
             .algorithms
             .iter()
