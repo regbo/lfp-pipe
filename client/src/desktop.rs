@@ -510,18 +510,6 @@ fn compact_status(message: &str) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::compact_status;
-
-    #[test]
-    fn tray_status_is_single_line_and_bounded() {
-        let status = compact_status(&format!("{}\nmore details", "x".repeat(100)));
-        assert_eq!(status.chars().count(), 64);
-        assert!(!status.contains('\n'));
-    }
-}
-
 fn make_icon() -> anyhow::Result<Icon> {
     const SIZE: u32 = 32;
     let mut pixmap = Pixmap::new(SIZE, SIZE).ok_or_else(|| anyhow!("create tray icon pixmap"))?;
@@ -606,4 +594,16 @@ fn brand_p_path() -> tiny_skia::Path {
     path.cubic_to(119.0, 102.0, 128.0, 113.0, 142.0, 113.0);
     path.close();
     path.finish().expect("valid brand P path")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_status;
+
+    #[test]
+    fn tray_status_is_single_line_and_bounded() {
+        let status = compact_status(&format!("{}\nmore details", "x".repeat(100)));
+        assert_eq!(status.chars().count(), 64);
+        assert!(!status.contains('\n'));
+    }
 }

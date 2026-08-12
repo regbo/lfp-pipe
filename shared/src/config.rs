@@ -384,6 +384,9 @@ pub struct ClientConfigDefaults {
     /// Default private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
+    /// Default standard reverse-proxy forwarding-header behavior.
+    #[serde(default)]
+    pub proxy_headers: Option<bool>,
 }
 
 /// Inheritable JWT authorization settings for multi-route client files.
@@ -538,6 +541,9 @@ pub struct ClientRouteConfig {
     /// Route-specific private destination for plaintext HTTP traffic.
     #[serde(default)]
     pub http_backend_addr: Option<String>,
+    /// Route-specific standard forwarding-header override.
+    #[serde(default)]
+    pub proxy_headers: Option<bool>,
     /// More-specific HTTP path backends served by this hostname/certificate.
     #[serde(default)]
     pub path_routes: Vec<ClientPathRouteConfig>,
@@ -556,6 +562,9 @@ pub struct ClientPathRouteConfig {
     /// Remove the prefix before forwarding to the backend.
     #[serde(default)]
     pub strip_path_prefix: bool,
+    /// Set safe standard forwarding headers before proxying.
+    #[serde(default)]
+    pub proxy_headers: Option<bool>,
     /// Optional JWT policy for only this path backend.
     #[serde(default)]
     pub authorization: Option<ClientAuthorizationDefaults>,
@@ -612,6 +621,9 @@ pub struct BackendRule {
     /// Remove [`Self::path_prefix`] before forwarding the HTTP request.
     #[serde(default)]
     pub strip_path_prefix: bool,
+    /// Set safe standard forwarding headers before proxying HTTP.
+    #[serde(default = "default_true")]
+    pub proxy_headers: bool,
     /// Socket address dialed by the client when this rule matches.
     pub backend_addr: String,
     /// Optional HTTP Host value substituted before forwarding.
@@ -651,6 +663,10 @@ fn resolve_loopback_shorthand(address: &str) -> String {
 
 fn default_request_subject() -> String {
     "tunnel.connect.request".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_claim_timeout_ms() -> u64 {
@@ -947,6 +963,10 @@ fn expand_client_route(
         pattern: pattern.clone(),
         path_prefix: None,
         strip_path_prefix: false,
+        proxy_headers: route
+            .proxy_headers
+            .or(defaults.proxy_headers)
+            .unwrap_or(true),
         backend_addr,
         backend_host: route.backend_host.or_else(|| defaults.backend_host.clone()),
         http_backend_addr: route
@@ -966,6 +986,11 @@ fn expand_client_route(
             pattern: pattern.clone(),
             path_prefix: Some(path_route.path_prefix),
             strip_path_prefix: path_route.strip_path_prefix,
+            proxy_headers: path_route
+                .proxy_headers
+                .or(route.proxy_headers)
+                .or(defaults.proxy_headers)
+                .unwrap_or(true),
             backend_addr: path_route.backend_addr,
             backend_host: path_route.backend_host,
             http_backend_addr: None,
@@ -1392,12 +1417,73 @@ mod tests {
         assert_eq!(ollama.backend_host.as_deref(), Some("127.0.0.1:11434"));
         assert_eq!(ollama.path_prefix.as_deref(), Some("/ollama"));
         assert!(ollama.strip_path_prefix);
+        assert!(ollama.proxy_headers);
         assert_eq!(authorization.audiences, ["ollama"]);
         assert_eq!(authorization.roles_claim, "groups");
         assert_eq!(authorization.required_roles, ["ollama-users"]);
         assert!(!authorization.forward_authorization);
         assert!(config.acme.is_some());
         assert!(config.oauth.is_some());
+    }
+
+    #[test]
+    fn path_routes_preserve_requests_and_set_forwarding_headers_by_default() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = "127.0.0.1:8080"
+
+                [defaults.acme]
+                contacts = ["mailto:admin@example.com"]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "service"
+                hostname = "service.example.com"
+
+                [[routes.path_routes]]
+                path_prefix = "/xyz"
+                backend_addr = "127.0.0.1:9000"
+            "#,
+        )
+        .expect("path route defaults");
+
+        let fallback = &configs[0].backend_rules[0];
+        let path = &configs[0].backend_rules[1];
+        assert!(fallback.proxy_headers);
+        assert!(path.proxy_headers);
+        assert!(!path.strip_path_prefix);
+        assert_eq!(path.backend_host, None);
+    }
+
+    #[test]
+    fn forwarding_header_setting_inherits_and_allows_path_override() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = "127.0.0.1:8080"
+                proxy_headers = false
+
+                [defaults.acme]
+                contacts = ["mailto:admin@example.com"]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "service"
+                hostname = "service.example.com"
+
+                [[routes.path_routes]]
+                path_prefix = "/xyz"
+                backend_addr = "127.0.0.1:9000"
+                proxy_headers = true
+            "#,
+        )
+        .expect("proxy header overrides");
+
+        assert!(!configs[0].backend_rules[0].proxy_headers);
+        assert!(configs[0].backend_rules[1].proxy_headers);
     }
 
     #[test]

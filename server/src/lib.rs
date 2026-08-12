@@ -89,7 +89,7 @@ async fn accept_public_loop(listener: TcpListener, state: AppState) -> anyhow::R
             .context("accept on public listener failed")?;
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_ingress(stream, state).await {
+            if let Err(error) = handle_ingress(stream, peer, state).await {
                 if is_expected_disconnect(&error) {
                     debug!(%peer, ?error, "ingress peer closed connection");
                 } else {
@@ -119,8 +119,12 @@ async fn accept_data_loop(listener: TcpListener, state: AppState) -> anyhow::Res
     }
 }
 
-async fn handle_ingress(stream: TcpStream, state: AppState) -> anyhow::Result<()> {
-    let hostname = detect_hostname(&stream).await?;
+async fn handle_ingress(
+    stream: TcpStream,
+    peer: std::net::SocketAddr,
+    state: AppState,
+) -> anyhow::Result<()> {
+    let (hostname, tls) = detect_hostname(&stream).await?;
     if let Some(route) =
         select_sni_passthrough(&state.config.sni_passthrough_routes, hostname.as_deref())
     {
@@ -141,7 +145,14 @@ async fn handle_ingress(stream: TcpStream, state: AppState) -> anyhow::Result<()
         return Ok(());
     }
     let connection_id = Uuid::new_v4().to_string();
-    let claim = broadcast_and_wait_for_claim(&state, &connection_id, hostname.as_deref()).await?;
+    let claim = broadcast_and_wait_for_claim(
+        &state,
+        &connection_id,
+        hostname.as_deref(),
+        peer.ip().to_string(),
+        tls,
+    )
+    .await?;
     let route_label = hostname.as_deref().unwrap_or("<default>");
 
     debug!(%connection_id, hostname = route_label, client_id = %claim.client_id, "accepted tunnel claim");
@@ -173,7 +184,7 @@ fn select_sni_passthrough<'a>(
         .find(|route| route.hostname.eq_ignore_ascii_case(hostname))
 }
 
-async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<Option<String>> {
+async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<(Option<String>, bool)> {
     let mut size = 512usize;
     let max_size = 16 * 1024;
 
@@ -184,13 +195,13 @@ async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<Option<String>> {
             .await
             .context("failed to peek ingress bytes")?;
         if peeked == 0 {
-            return Ok(None);
+            return Ok((None, false));
         }
         buf.truncate(peeked);
 
         match validate_tls_record_header(&buf) {
             Ok(()) => match extract_sni(&buf) {
-                Ok(value) => return Ok(value),
+                Ok(value) => return Ok((value, true)),
                 Err(error) if size < max_size => {
                     debug!(?error, size, "client hello incomplete, peeking more");
                     size = (size * 2).min(max_size);
@@ -199,14 +210,14 @@ async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<Option<String>> {
             },
             Err(_) => {
                 if let Some(host) = extract_http_host(&buf) {
-                    return Ok(Some(host));
+                    return Ok((Some(host), false));
                 }
                 if size < max_size && looks_like_http_prefix(&buf) {
                     debug!(size, "http request incomplete, peeking more");
                     size = (size * 2).min(max_size);
                     continue;
                 }
-                return Ok(None);
+                return Ok((None, false));
             }
         }
     }
@@ -216,6 +227,8 @@ async fn broadcast_and_wait_for_claim(
     state: &AppState,
     connection_id: &str,
     hostname: Option<&str>,
+    client_ip: String,
+    tls: bool,
 ) -> anyhow::Result<ConnectionClaim> {
     let reply_subject = state.nats.new_inbox();
     let mut claims = state
@@ -227,6 +240,8 @@ async fn broadcast_and_wait_for_claim(
     let request = ConnectionRequest {
         connection_id: connection_id.to_string(),
         hostname: hostname.map(ToOwned::to_owned),
+        client_ip: Some(client_ip),
+        tls,
         reply_subject: reply_subject.clone(),
         server_data_addr: state.config.server_data_addr().to_string(),
         deadline_unix_ms: unix_time_ms() + state.config.claim_timeout_ms,

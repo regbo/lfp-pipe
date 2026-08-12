@@ -113,7 +113,7 @@ function RouteEditor({ route, routeIndex, setRoute, setPath, setAuthorization, u
     <div className="config-grid">
       <TextField className="field-span-wide" label="Hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} />
     </div>
-    <div className="config-actions"><Button type="button" variant="light" size="xs" leftSection={<Plus size={15} />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/service", backend_addr: "127.0.0.1:8080", strip_path_prefix: true }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button><Button type="button" color="red" variant="light" size="xs" leftSection={<Trash2 size={15} />} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}>Remove route</Button></div>
+    <div className="config-actions"><Button type="button" variant="light" size="xs" leftSection={<Plus size={15} />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/service", backend_addr: "127.0.0.1:8080" }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button><Button type="button" color="red" variant="light" size="xs" leftSection={<Trash2 size={15} />} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}>Remove route</Button></div>
     {paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
     <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="technical"><Accordion.Control>Technical options</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
       <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
@@ -133,11 +133,14 @@ function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, up
       <TextField label="Backend address" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} />
     </SimpleGrid>
     <Group gap="xl" className="path-options">
-      <CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} />
       <CheckboxField label="Require bearer JWT" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (enabled) target.authorization = { issuer: "https://auth.example.com/application/o/provider/", audiences: ["service"], jwks_cache_file: "~/.cache/lfp-pipe/auth/jwks.json", roles_claim: "groups", required_roles: [], role_match: "any", algorithms: ["RS256"], jwks_refresh_seconds: 3600, jwks_max_stale_seconds: 604800, forward_authorization: false }; else delete target.authorization; })} />
     </Group>
     <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="request"><Accordion.Control>Request rewriting</Accordion.Control><Accordion.Panel>
       <TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} />
+      <Group mt="sm" gap="xl">
+        <CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} />
+        <CheckboxField label="Set proxy headers" checked={path.proxy_headers === undefined ? true : bool(path.proxy_headers)} onChange={(value) => setPath(routeIndex, pathIndex, "proxy_headers", value)} />
+      </Group>
     </Accordion.Panel></Accordion.Item></Accordion>
   </div>;
 }

@@ -439,6 +439,8 @@ async fn bridge_connection(
         || backends.iter().any(|backend| {
             backend.rule.http_backend_addr.is_some()
                 || backend.rule.path_prefix.is_some()
+                || backend.rule.proxy_headers
+                || backend.rule.backend_host.is_some()
                 || backend.authorization.is_some()
         });
     let plaintext_http = connection_is_plaintext_http(&server_stream, inspect_http).await?;
@@ -450,7 +452,7 @@ async fn bridge_connection(
             client_id,
             "handing tunneled TLS to automatic certificate runtime"
         );
-        return acme.accept(server_stream).await;
+        return acme.accept(server_stream, request.client_ip.clone()).await;
     }
     let fallback = backends
         .iter()
@@ -482,6 +484,13 @@ async fn bridge_connection(
                     .path_prefix
                     .as_deref()
                     .context("missing path_prefix")?,
+            )?;
+        }
+        if selected.rule.proxy_headers {
+            request_bytes = authorization::set_proxy_headers(
+                request_bytes,
+                request.client_ip.as_deref(),
+                if request.tls { "https" } else { "http" },
             )?;
         }
         if let Some(host) = selected.rule.backend_host.as_deref() {
@@ -553,6 +562,7 @@ mod tests {
             pattern: "*.example.com".to_string(),
             path_prefix: None,
             strip_path_prefix: false,
+            proxy_headers: true,
             backend_addr: "127.0.0.1:443".to_string(),
             backend_host: None,
             http_backend_addr: Some("127.0.0.1:80".to_string()),

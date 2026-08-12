@@ -481,6 +481,82 @@ pub(crate) fn set_host_header(bytes: Vec<u8>, host: &str) -> anyhow::Result<Vec<
     Ok(output)
 }
 
+/// Apply standard reverse-proxy headers using trusted tunnel metadata.
+pub(crate) fn set_proxy_headers(
+    bytes: Vec<u8>,
+    client_ip: Option<&str>,
+    scheme: &str,
+) -> anyhow::Result<Vec<u8>> {
+    ensure!(
+        matches!(scheme, "http" | "https"),
+        "forwarded scheme must be http or https"
+    );
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| anyhow!("incomplete HTTP request headers"))?;
+    let mut output = Vec::with_capacity(bytes.len() + 160);
+    let mut original_host = None;
+    let mut has_accept_encoding = false;
+
+    for (index, line) in bytes[..header_end].split(|byte| *byte == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if index == 0 {
+            output.extend_from_slice(line);
+            output.extend_from_slice(b"\r\n");
+            continue;
+        }
+        let Some(separator) = line.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        let name = &line[..separator];
+        let value = line[separator + 1..]
+            .strip_prefix(b" ")
+            .unwrap_or(&line[separator + 1..]);
+        if name.eq_ignore_ascii_case(b"host") {
+            ensure!(
+                original_host.is_none(),
+                "HTTP request must contain exactly one Host header"
+            );
+            original_host = Some(value.to_vec());
+        }
+        if name.eq_ignore_ascii_case(b"accept-encoding") {
+            has_accept_encoding = true;
+        }
+        if name.eq_ignore_ascii_case(b"x-forwarded-for")
+            || name.eq_ignore_ascii_case(b"x-forwarded-proto")
+            || name.eq_ignore_ascii_case(b"x-forwarded-host")
+        {
+            continue;
+        }
+        output.extend_from_slice(line);
+        output.extend_from_slice(b"\r\n");
+    }
+
+    let original_host =
+        original_host.context("HTTP request must contain exactly one Host header")?;
+    if let Some(client_ip) = client_ip.filter(|value| !value.trim().is_empty()) {
+        ensure!(
+            !client_ip.contains(['\r', '\n']),
+            "client IP contains invalid characters"
+        );
+        output.extend_from_slice(b"X-Forwarded-For: ");
+        output.extend_from_slice(client_ip.as_bytes());
+        output.extend_from_slice(b"\r\n");
+    }
+    output.extend_from_slice(b"X-Forwarded-Proto: ");
+    output.extend_from_slice(scheme.as_bytes());
+    output.extend_from_slice(b"\r\nX-Forwarded-Host: ");
+    output.extend_from_slice(&original_host);
+    output.extend_from_slice(b"\r\n");
+    if !has_accept_encoding {
+        output.extend_from_slice(b"Accept-Encoding: gzip\r\n");
+    }
+    output.extend_from_slice(b"\r\n");
+    output.extend_from_slice(&bytes[header_end + 4..]);
+    Ok(output)
+}
+
 fn bearer_token(bytes: &[u8]) -> anyhow::Result<&str> {
     let mut headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
@@ -591,8 +667,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        bearer_token, claim_strings, request_path, set_host_header, strip_authorization_header,
-        strip_request_path_prefix,
+        bearer_token, claim_strings, request_path, set_host_header, set_proxy_headers,
+        strip_authorization_header, strip_request_path_prefix,
     };
     use serde_json::json;
 
@@ -640,5 +716,43 @@ mod tests {
         let rewritten = strip_request_path_prefix(request, "/ollama").expect("rewritten");
         assert!(rewritten.starts_with(b"POST /api/chat?stream=false HTTP/1.1\r\n"));
         assert!(rewritten.ends_with(b"\r\n\r\n{}"));
+    }
+
+    #[test]
+    fn proxy_headers_replace_spoofed_values_and_preserve_public_host() {
+        let request = b"POST /xyz/api?stream=false HTTP/1.1\r\nHost: public.example:443\r\nX-Forwarded-For: 203.0.113.99\r\nX-Forwarded-Proto: ftp\r\nX-Forwarded-Host: attacker.example\r\nContent-Length: 2\r\n\r\n{}".to_vec();
+        let rewritten =
+            set_proxy_headers(request, Some("198.51.100.24"), "https").expect("proxy headers");
+        let text = String::from_utf8(rewritten).expect("UTF-8 request");
+        assert!(text.starts_with("POST /xyz/api?stream=false HTTP/1.1\r\n"));
+        assert!(text.contains("Host: public.example:443\r\n"));
+        assert!(text.contains("X-Forwarded-For: 198.51.100.24\r\n"));
+        assert!(text.contains("X-Forwarded-Proto: https\r\n"));
+        assert!(text.contains("X-Forwarded-Host: public.example:443\r\n"));
+        assert!(text.contains("Accept-Encoding: gzip\r\n"));
+        assert!(!text.contains("attacker.example"));
+        assert!(!text.contains("203.0.113.99"));
+        assert!(text.ends_with("\r\n\r\n{}"));
+    }
+
+    #[test]
+    fn proxy_headers_preserve_existing_accept_encoding() {
+        let request =
+            b"GET / HTTP/1.1\r\nHost: public.example\r\nAccept-Encoding: br\r\n\r\n".to_vec();
+        let rewritten = set_proxy_headers(request, None, "http").expect("proxy headers");
+        let text = String::from_utf8(rewritten).expect("UTF-8 request");
+        assert_eq!(text.matches("Accept-Encoding:").count(), 1);
+        assert!(text.contains("Accept-Encoding: br\r\n"));
+    }
+
+    #[test]
+    fn host_override_keeps_original_host_in_forwarding_header() {
+        let request = b"GET / HTTP/1.1\r\nHost: public.example\r\n\r\n".to_vec();
+        let forwarded =
+            set_proxy_headers(request, Some("198.51.100.24"), "https").expect("proxy headers");
+        let rewritten = set_host_header(forwarded, "127.0.0.1:8080").expect("host override");
+        let text = String::from_utf8(rewritten).expect("UTF-8 request");
+        assert!(text.contains("Host: 127.0.0.1:8080\r\n"));
+        assert!(text.contains("X-Forwarded-Host: public.example\r\n"));
     }
 }

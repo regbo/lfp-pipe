@@ -10,6 +10,12 @@ pub struct ConnectionRequest {
     pub connection_id: String,
     /// HTTP Host or TLS SNI, or `None` for default/raw TCP routing.
     pub hostname: Option<String>,
+    /// Public ingress peer IP, supplied by the trusted tunnel server.
+    #[serde(default)]
+    pub client_ip: Option<String>,
+    /// Whether the public ingress connection used TLS.
+    #[serde(default)]
+    pub tls: bool,
     /// Per-request NATS inbox on which clients submit claims.
     pub reply_subject: String,
     /// Public callback/data address the winning client must dial.
@@ -48,4 +54,19 @@ pub fn encode_json<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
 /// Decode one control-plane value from JSON.
 pub fn decode_json<T: for<'de> Deserialize<'de>>(payload: &[u8]) -> anyhow::Result<T> {
     serde_json::from_slice(payload).context("failed to parse JSON payload")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConnectionRequest, decode_json};
+
+    #[test]
+    fn older_servers_default_new_ingress_metadata() {
+        let request: ConnectionRequest = decode_json(
+            br#"{"connection_id":"one","hostname":"example.com","reply_subject":"reply","server_data_addr":"server:7001","deadline_unix_ms":1}"#,
+        )
+        .expect("legacy connection request");
+        assert_eq!(request.client_ip, None);
+        assert!(!request.tls);
+    }
 }
