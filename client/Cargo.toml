@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 autobins = false
 
@@ -28,3 +28,8 @@ shared = { path = "../shared" }
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+open.workspace = true
+tray-icon.workspace = true
+winit.workspace = true

@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.6"
+version = "0.1.7"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -27,6 +27,9 @@ tokio-stream = "0.1"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tray-icon = "0.24.2"
+winit = "0.30.13"
+open = "5.4.1"
 tokio-splice2 = "0.3.2"
 url = "2.5"
 uuid = { version = "1.18", features = ["serde", "v4"] }

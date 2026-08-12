@@ -156,6 +156,18 @@ rest of the hostname available for a browser-oriented Authentik forward-auth
 proxy. The bearer header is removed before forwarding by default; set
 `forward_authorization = true` only when the private backend must receive it.
 
+### Desktop tray
+
+On Windows, macOS, and GTK-based Linux desktops, the client automatically adds
+an lfp-pipe system-tray icon. Its menu shows the process status and can open the
+active TOML file or its folder, validate and reload the configuration, or stop
+the client. Reload starts a replacement with the same arguments only after the
+TOML parses successfully.
+
+Use `--tray always` to require desktop integration or `--tray never` for a
+headless service. `LFP_PIPE_TRAY=auto|always|never` provides the same centralized
+environment setting; CLI flags continue to take precedence.
+
 `issuer` is also the OIDC discovery base, so `jwks_uri` is normally omitted.
 For an Authentik per-provider issuer, use the exact trailing-slash issuer shown
 in its discovery document. Set `jwks_uri` explicitly if discovery is not

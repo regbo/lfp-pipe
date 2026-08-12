@@ -5,7 +5,8 @@ the server or client crates.
 
 | Public utility | Location | Responsibility | Main consumers |
 |---|---|---|---|
-| `parse_server_runtime`, `parse_client_runtime` | `shared/src/cli.rs` | Resolve Clap flags and environment variables, then layer them over TOML configuration; client parsing expands all route sessions. | Binary entry points |
+| `parse_server_runtime`, `parse_client_runtime`, `DesktopMode` | `shared/src/cli.rs` | Resolve Clap flags and environment variables, then layer them over TOML configuration; client parsing expands all route sessions and selects automatic/required/headless desktop integration. | Binary entry points |
+| `desktop::run`, `desktop::is_available` | `client/src/desktop.rs` | Host the portable tray-icon/winit event loop, expose status/open-config/reload/exit actions, and supervise the async tunnel runtime on a worker thread. | Client binary on Windows, macOS, and desktop Linux |
 | `ServerConfig`, `ClientConfig`, `BackendRule` | `shared/src/config.rs` | Define concrete typed component configuration, defaults, and routing data. | CLI, server, client |
 | `ClientConfigDefaults`, `ClientRouteConfig`, `ClientPathRouteConfig`, `load_client_configs` | `shared/src/config.rs` | Inherit shared settings into independently authenticated hostname sessions and path-specific backends while retaining the legacy format. | Multi-route tunnel client |
 | `ClientOAuthConfig` | `shared/src/config.rs` | Configure Authentik machine credentials and automatic route-ticket renewal without storing NATS tickets. | Tunnel client |

@@ -27,6 +27,31 @@ pub struct RuntimeConfig<T> {
     pub log_filter: String,
 }
 
+/// Controls whether the client creates a desktop system-tray interface.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum DesktopMode {
+    /// Enable the tray only when the process appears to have a desktop session.
+    #[default]
+    Auto,
+    /// Require the tray interface and fail if it cannot be initialized.
+    Always,
+    /// Run as a purely headless process.
+    Never,
+}
+
+/// Configuration and source metadata needed to launch the tunnel client.
+#[derive(Debug)]
+pub struct ClientRuntimeConfig {
+    /// Fully layered route configurations.
+    pub config: Vec<ClientConfig>,
+    /// Tracing filter selected by CLI, environment, or default.
+    pub log_filter: String,
+    /// TOML path exposed through the desktop tray's Open Config action.
+    pub config_path: PathBuf,
+    /// Requested desktop integration mode.
+    pub desktop_mode: DesktopMode,
+}
+
 #[derive(Debug, Args)]
 struct CommonOptions {
     /// Path to the component's TOML configuration file.
@@ -150,10 +175,19 @@ struct ClientCli {
     /// Milliseconds to wait for the server's claim decision.
     #[arg(long, env = "LFP_PIPE_CLAIM_ACK_TIMEOUT_MS", value_name = "MS")]
     claim_ack_timeout_ms: Option<u64>,
+
+    /// Show a system-tray interface when a desktop session is available.
+    #[arg(
+        long,
+        env = "LFP_PIPE_TRAY",
+        value_enum,
+        default_value_t = DesktopMode::Auto
+    )]
+    tray: DesktopMode,
 }
 
 impl ClientCli {
-    fn load(self) -> anyhow::Result<RuntimeConfig<Vec<ClientConfig>>> {
+    fn load(self) -> anyhow::Result<ClientRuntimeConfig> {
         let overrides = ClientOverrides {
             client_id: self.client_id,
             nats_url: self.nats_url,
@@ -171,9 +205,11 @@ impl ClientCli {
             .into_iter()
             .map(|config| config.with_overrides(overrides.clone()))
             .collect();
-        Ok(RuntimeConfig {
+        Ok(ClientRuntimeConfig {
             config,
             log_filter: self.common.log_filter,
+            config_path: self.common.config,
+            desktop_mode: self.tray,
         })
     }
 }
@@ -184,7 +220,7 @@ pub fn parse_server_runtime() -> anyhow::Result<RuntimeConfig<ServerConfig>> {
 }
 
 /// Parse and layer client configuration from CLI flags, environment, and TOML.
-pub fn parse_client_runtime() -> anyhow::Result<RuntimeConfig<Vec<ClientConfig>>> {
+pub fn parse_client_runtime() -> anyhow::Result<ClientRuntimeConfig> {
     ClientCli::parse().load()
 }
 
@@ -217,5 +253,7 @@ mod tests {
         assert!(help.contains("--client-id"));
         assert!(help.contains("LFP_PIPE_CLIENT_ID"));
         assert!(help.contains("LFP_PIPE_RELAY_MODE"));
+        assert!(help.contains("--tray"));
+        assert!(help.contains("LFP_PIPE_TRAY"));
     }
 }
