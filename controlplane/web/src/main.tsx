@@ -2,7 +2,7 @@ import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
 import { ArrowRight, Check, Copy, Download, KeyRound, LoaderCircle, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
-import { Badge, Button, Checkbox, Divider, Group, Input, MantineProvider, Select, TextInput, createTheme } from "@mantine/core";
+import { Badge, Button, Checkbox, Divider, Group, Input, MantineProvider, Menu, Select, TextInput, UnstyledButton, createTheme } from "@mantine/core";
 import { ConfigEditor } from "./config-editor";
 import "@mantine/core/styles.css";
 import "./styles.css";
@@ -316,13 +316,8 @@ http_backend_addr = "127.0.0.1:80"
 
   return (
     <div className="shell">
-      <header className="topbar"><Brand settings={brand} /><Button variant="subtle" leftSection={<LogOut size={16} />} onClick={logout}><span>Sign out</span></Button></header>
+      <header className="topbar"><Brand settings={brand} /><Menu position="bottom-end" width={240} shadow="md"><Menu.Target><UnstyledButton className="account-menu"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></UnstyledButton></Menu.Target><Menu.Dropdown><Menu.Label>Account</Menu.Label><Menu.Item color="red" leftSection={<LogOut size={15} />} onClick={logout}>Sign out</Menu.Item></Menu.Dropdown></Menu></header>
       <main className="main"><section className="dashboard">
-        <div className="dashboard-header compact-header">
-          <div><span className="eyebrow">LFP Pipe</span><h1>Connections</h1></div>
-          <div className="identity"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></div>
-        </div>
-
         <div className="console-grid">
           <section className="section-card compact-card"><div className="compact-title"><div><h2>Managed clients</h2><p>Install, approve, then manage routes here.</p></div><Badge size="md" variant="light">{managedClients.filter((client) => client.online !== false).length} online</Badge></div>
           <div className="device-panel flat-panel">
