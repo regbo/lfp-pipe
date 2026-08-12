@@ -136,7 +136,6 @@ function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, up
       <CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} />
       <CheckboxField label="Require bearer JWT" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (enabled) target.authorization = { issuer: "https://auth.example.com/application/o/provider/", audiences: ["service"], jwks_cache_file: "~/.cache/lfp-pipe/auth/jwks.json", roles_claim: "groups", required_roles: [], role_match: "any", algorithms: ["RS256"], jwks_refresh_seconds: 3600, jwks_max_stale_seconds: 604800, forward_authorization: false }; else delete target.authorization; })} />
     </Group>
-    {protectedRoute ? <div className="protected-summary">JWT policy available below</div> : null}
     <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="request"><Accordion.Control>Request rewriting</Accordion.Control><Accordion.Panel>
       <TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} />
     </Accordion.Panel></Accordion.Item></Accordion>

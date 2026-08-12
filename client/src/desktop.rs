@@ -131,12 +131,15 @@ pub fn run(
                             Some(reporter),
                         ))
                     } else {
-                        runtime.block_on(crate::run_all(configs))
+                        runtime.block_on(run_local_forever(configs, runtime_proxy.clone()))
                     }
                 });
             let message = match result {
-                Ok(()) => "Tunnel runtime stopped".to_string(),
-                Err(error) => format!("Tunnel stopped: {error:#}"),
+                Ok(()) => "No local routes configured".to_string(),
+                Err(error) => {
+                    tracing::error!(?error, "desktop tunnel runtime stopped");
+                    "Tunnel unavailable".to_string()
+                }
             };
             let _ = runtime_proxy.send_event(UserEvent::RuntimeStopped(message));
         })
@@ -176,6 +179,29 @@ pub fn run(
     Ok(())
 }
 
+async fn run_local_forever(
+    configs: Vec<ClientConfig>,
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+) -> anyhow::Result<()> {
+    if configs.is_empty() {
+        return Ok(());
+    }
+    let mut retry_delay = Duration::from_secs(1);
+    loop {
+        match crate::run_all(configs.clone()).await {
+            Ok(()) => tracing::warn!(?retry_delay, "local tunnel runtime stopped; reconnecting"),
+            Err(error) => tracing::warn!(
+                ?error,
+                ?retry_delay,
+                "local tunnel connection stopped; reconnecting"
+            ),
+        }
+        let _ = proxy.send_event(UserEvent::ConfigStatus(Some("Reconnecting…".into())));
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = retry_delay.saturating_mul(2).min(Duration::from_secs(30));
+    }
+}
+
 struct TrayApplication {
     config_path: PathBuf,
     status: MenuItem,
@@ -194,7 +220,6 @@ impl TrayApplication {
         route_count: usize,
         managed_central: bool,
     ) -> anyhow::Result<Self> {
-        let settings = crate::desktop_settings::load_or_create()?;
         let initial_status = if managed_central {
             "Running · centrally managed".to_string()
         } else {
@@ -218,12 +243,7 @@ impl TrayApplication {
             managed_central,
             None,
         );
-        let manage = MenuItem::with_id(
-            MANAGE_ID,
-            format!("Manage · {}", settings.control_plane_url),
-            true,
-            None,
-        );
+        let manage = MenuItem::with_id(MANAGE_ID, "Manage", true, None);
         let management_url =
             MenuItem::with_id(MANAGEMENT_URL_ID, "Change management server…", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "Exit lfp-pipe", true, None);
@@ -235,9 +255,9 @@ impl TrayApplication {
             &start_at_boot,
             &remote_managed,
             &manage,
-            &management_url,
         ];
         if !managed_central {
+            items.push(&management_url);
             items.push(&open_config);
             items.push(&open_folder);
         }
@@ -292,13 +312,8 @@ impl TrayApplication {
                         settings.remote_managed = self.remote_managed.is_checked();
                         crate::desktop_settings::save(&settings)
                     })
-                    .and_then(|()| {
-                        if self.remote_managed.is_checked() {
-                            restart_without_local_config()
-                        } else {
-                            restart_current_process()
-                        }
-                    }) {
+                    .and_then(|()| restart_without_config_override())
+                {
                     Ok(()) => event_loop.exit(),
                     Err(error) => {
                         self.remote_managed
@@ -329,7 +344,7 @@ impl TrayApplication {
                             if let Err(error) =
                                 crate::desktop_settings::save(&settings).and_then(|()| {
                                     if self.remote_managed.is_checked() {
-                                        restart_without_local_config()
+                                        restart_without_config_override()
                                     } else {
                                         restart_current_process()
                                     }
@@ -358,6 +373,8 @@ impl TrayApplication {
     }
 
     fn set_error(&mut self, message: String) {
+        tracing::warn!(detail = %message, "desktop status warning");
+        let message = compact_status(&message);
         self.status.set_text(&message);
         if let Some(tray) = &self.tray {
             let _ = tray.set_tooltip(Some(&message));
@@ -456,7 +473,7 @@ fn restart_current_process() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn restart_without_local_config() -> anyhow::Result<()> {
+fn restart_without_config_override() -> anyhow::Result<()> {
     let executable = env::current_exe().context("locate current executable")?;
     let mut args = env::args_os().skip(1).peekable();
     let mut filtered = Vec::new();
@@ -475,6 +492,34 @@ fn restart_without_local_config() -> anyhow::Result<()> {
         .spawn()
         .context("start remotely managed replacement")?;
     Ok(())
+}
+
+fn compact_status(message: &str) -> String {
+    const MAX_CHARS: usize = 64;
+    let first_line = message
+        .lines()
+        .next()
+        .unwrap_or("Status unavailable")
+        .trim();
+    if first_line.chars().count() <= MAX_CHARS {
+        return first_line.to_string();
+    }
+    format!(
+        "{}…",
+        first_line.chars().take(MAX_CHARS - 1).collect::<String>()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_status;
+
+    #[test]
+    fn tray_status_is_single_line_and_bounded() {
+        let status = compact_status(&format!("{}\nmore details", "x".repeat(100)));
+        assert_eq!(status.chars().count(), 64);
+        assert!(!status.contains('\n'));
+    }
 }
 
 fn make_icon() -> anyhow::Result<Icon> {

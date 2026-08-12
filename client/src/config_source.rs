@@ -9,6 +9,9 @@ use serde::Deserialize;
 use shared::config::{CentralClientBootstrap, ClientConfig, parse_client_config_document};
 use tokio::{sync::mpsc, time::sleep};
 
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Deserialize)]
 struct CentralResponse {
     config_toml: String,
@@ -149,35 +152,104 @@ pub async fn run_central_with_reporter(
     bootstrap: CentralClientBootstrap,
     reporter: Option<Arc<dyn Fn(Option<String>) + Send + Sync>>,
 ) -> anyhow::Result<()> {
+    let mut retry_delay = INITIAL_RETRY_DELAY;
     loop {
-        let configs = fetch_central(&bootstrap).await?;
-        let fingerprint = serde_json::to_vec(&configs).context("fingerprint central config")?;
+        let configs = match fetch_central(&bootstrap).await {
+            Ok(configs) => configs,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    ?retry_delay,
+                    "central client is not ready; retrying"
+                );
+                if let Some(reporter) = &reporter {
+                    reporter(Some("Reconnecting…".into()));
+                }
+                sleep(retry_delay).await;
+                retry_delay = next_retry_delay(retry_delay);
+                continue;
+            }
+        };
+        let fingerprint = match serde_json::to_vec(&configs).context("fingerprint central config") {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    ?retry_delay,
+                    "central configuration is not ready; retrying"
+                );
+                if let Some(reporter) = &reporter {
+                    reporter(Some("Configuration unavailable · retrying".into()));
+                }
+                sleep(retry_delay).await;
+                retry_delay = next_retry_delay(retry_delay);
+                continue;
+            }
+        };
+        if let Some(reporter) = &reporter {
+            reporter(None);
+        }
         let (update_sender, mut update_receiver) = mpsc::channel(4);
         let push_task = tokio::spawn(push_updates(bootstrap.clone(), update_sender));
         let runtime = crate::run_all(configs);
         tokio::pin!(runtime);
+        let mut replace_routes = false;
         loop {
             tokio::select! {
-                result = &mut runtime => return result,
+                result = &mut runtime => {
+                    match result {
+                        Ok(()) => tracing::warn!(?retry_delay, "tunnel runtime stopped; reconnecting"),
+                        Err(error) => tracing::warn!(?error, ?retry_delay, "tunnel connection stopped; reconnecting"),
+                    }
+                    if let Some(reporter) = &reporter {
+                        reporter(Some("Reconnecting…".into()));
+                    }
+                    break;
+                },
                 _ = update_receiver.recv() => {
                     match fetch_central(&bootstrap).await {
                         Ok(next) if serde_json::to_vec(&next).context("fingerprint central config")? != fingerprint => {
                             if let Some(reporter) = &reporter { reporter(None); }
+                            replace_routes = true;
                             break
                         },
                         Ok(_) => {
                             if let Some(reporter) = &reporter { reporter(None); }
                         }
                         Err(error) => {
-                            let message = format!("Config warning: {error:#}");
                             tracing::warn!(?error, "central config refresh rejected; retaining active routes");
-                            if let Some(reporter) = &reporter { reporter(Some(message)); }
+                            if let Some(reporter) = &reporter { reporter(Some("Configuration warning".into())); }
                         },
                     }
                 }
             }
         }
         push_task.abort();
-        tracing::info!("central configuration changed; replacing active routes");
+        if replace_routes {
+            retry_delay = INITIAL_RETRY_DELAY;
+            tracing::info!("central configuration changed; replacing active routes");
+        } else {
+            sleep(retry_delay).await;
+            retry_delay = next_retry_delay(retry_delay);
+        }
+    }
+}
+
+fn next_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(MAX_RETRY_DELAY)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_delay_is_capped() {
+        assert_eq!(
+            next_retry_delay(Duration::from_secs(1)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(next_retry_delay(Duration::from_secs(20)), MAX_RETRY_DELAY);
+        assert_eq!(next_retry_delay(MAX_RETRY_DELAY), MAX_RETRY_DELAY);
     }
 }

@@ -19,6 +19,22 @@
   --shadow-card: 0 24px 70px rgba(11, 20, 38, 0.12);
 }
 
+.mantine-Button-root[data-color="coral"][data-variant="filled"] {
+  color: var(--color-brand-ink);
+  background: var(--color-brand);
+}
+.mantine-Button-root[data-color="coral"][data-variant="filled"]:hover { background: var(--color-brand-strong); }
+.mantine-Button-root[data-color="coral"][data-variant="light"],
+.mantine-Button-root[data-color="coral"][data-variant="subtle"] {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-brand) 14%, transparent);
+}
+.mantine-Button-root[data-color="coral"][data-variant="light"]:hover,
+.mantine-Button-root[data-color="coral"][data-variant="subtle"]:hover {
+  color: var(--color-brand-ink);
+  background: var(--color-brand);
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
@@ -50,4 +66,6 @@
   --radius-md: 1rem;
   --radius-lg: 1.35rem;
   --content-width: 1120px;
+  --page-gutter: clamp(0.75rem, 2vw, 1rem);
+  --content-gap: clamp(0.75rem, 1.8vw, 1.25rem);
 }
