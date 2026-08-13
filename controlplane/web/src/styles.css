@@ -190,6 +190,8 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .checkbox-field[data-checked] .checkbox-mark { border-color: var(--color-brand); background: var(--color-brand); }
 .checkbox-field input:focus-visible + .checkbox-mark { outline: 3px solid color-mix(in srgb, var(--color-brand) 34%, transparent); outline-offset: 2px; }
 .path-disclosure { margin-top: 0.35rem; }
+.request-options { display: grid; gap: 0.75rem; }
+.request-option-toggles { min-height: 2rem; align-items: center; flex-wrap: wrap; row-gap: 0.55rem; }
 .authorization-config { display: grid; gap: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--color-line); }
 .route-inheritance { margin: 0; color: var(--color-muted); font-size: 0.72rem; }
 .routes-empty { padding: 1.5rem; display: grid; place-items: center; gap: 0.25rem; border: 1px dashed var(--color-line-strong); border-radius: var(--radius-md); color: var(--color-muted); text-align: center; }

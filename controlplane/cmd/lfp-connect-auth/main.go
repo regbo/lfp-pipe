@@ -35,7 +35,7 @@ func main() {
 	}
 	defer func() { _ = calloutService.Close() }()
 
-	api, err := httpapi.New(ctx, cfg, tickets, logger)
+	api, err := httpapi.New(ctx, cfg, tickets, calloutService.NATS(), logger)
 	if err != nil {
 		logger.Error("HTTP API startup failed", "error", err)
 		os.Exit(1)

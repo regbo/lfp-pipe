@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/securecookie"
+	"github.com/nats-io/nats.go"
 	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
 	"github.com/regbo/lfp-pipe/controlplane/internal/config"
 	"github.com/regbo/lfp-pipe/controlplane/internal/routeauth"
@@ -29,8 +31,10 @@ import (
 )
 
 const (
-	sessionCookie = "lfp_connect_session"
-	flowCookie    = "lfp_connect_oidc_flow"
+	sessionCookie         = "lfp_connect_session"
+	flowCookie            = "lfp_connect_oidc_flow"
+	devicePresenceSubject = "lfp.control.devices.presence"
+	deviceOnlineLease     = 45 * time.Second
 )
 
 // Server serves browser authentication and tunnel-token requests.
@@ -42,6 +46,7 @@ type Server struct {
 	cookies      *securecookie.SecureCookie
 	tickets      *ticket.Signer
 	authentik    *authentikapi.Client
+	nats         *nats.Conn
 	cookieSecure bool
 	devices      *deviceRegistry
 }
@@ -53,12 +58,14 @@ type deviceState struct {
 	Platform string    `json:"platform"`
 	LastSeen time.Time `json:"last_seen"`
 	Online   bool      `json:"online"`
+	Known    bool      `json:"presence_known"`
 }
 
 type deviceRegistry struct {
 	sync.Mutex
 	devices     map[string]deviceState
 	subscribers map[string]map[chan struct{}]struct{}
+	presence    map[chan struct{}]struct{}
 	enrollments map[string]*deviceEnrollment
 }
 
@@ -76,15 +83,31 @@ type deviceEnrollment struct {
 }
 
 func newDeviceRegistry() *deviceRegistry {
-	return &deviceRegistry{devices: make(map[string]deviceState), subscribers: make(map[string]map[chan struct{}]struct{}), enrollments: make(map[string]*deviceEnrollment)}
+	return &deviceRegistry{devices: make(map[string]deviceState), subscribers: make(map[string]map[chan struct{}]struct{}), presence: make(map[chan struct{}]struct{}), enrollments: make(map[string]*deviceEnrollment)}
 }
 
-func (r *deviceRegistry) touch(device deviceState) {
-	r.Lock()
-	defer r.Unlock()
+func (r *deviceRegistry) touch(device deviceState) deviceState {
 	device.LastSeen = time.Now().UTC()
 	device.Online = true
+	device.Known = true
+	r.record(device)
+	return device
+}
+
+func (r *deviceRegistry) record(device deviceState) {
+	r.Lock()
+	defer r.Unlock()
+	if current, ok := r.devices[device.Username]; ok && !device.LastSeen.After(current.LastSeen) {
+		return
+	}
+	device.Known = true
 	r.devices[device.Username] = device
+	for updates := range r.presence {
+		select {
+		case updates <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (r *deviceRegistry) list() []deviceState {
@@ -119,6 +142,14 @@ func (r *deviceRegistry) notify(username string) {
 	}
 }
 
+func (r *deviceRegistry) subscribePresence() (chan struct{}, func()) {
+	r.Lock()
+	defer r.Unlock()
+	updates := make(chan struct{}, 1)
+	r.presence[updates] = struct{}{}
+	return updates, func() { r.Lock(); defer r.Unlock(); delete(r.presence, updates) }
+}
+
 type browserSession struct {
 	Subject      string   `json:"sub"`
 	Name         string   `json:"name"`
@@ -135,7 +166,7 @@ type oidcFlow struct {
 }
 
 // New discovers Authentik and constructs the API handler.
-func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, logger *slog.Logger) (*Server, error) {
+func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, nc *nats.Conn, logger *slog.Logger) (*Server, error) {
 	provider, err := oidc.NewProvider(ctx, cfg.OIDCIssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("discover Authentik OIDC provider: %w", err)
@@ -145,7 +176,7 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, logger 
 	codec := securecookie.New(hashKey[:], blockKey[:])
 	codec.MaxAge(int((12 * time.Hour).Seconds()))
 
-	return &Server{
+	server := &Server{
 		cfg:    cfg,
 		logger: logger,
 		oauth: oauth2.Config{
@@ -159,9 +190,30 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, logger 
 		cookies:      codec,
 		tickets:      tickets,
 		authentik:    authentikapi.NewClient(cfg.AuthentikAPIURL, cfg.AuthentikAPIToken),
+		nats:         nc,
 		cookieSecure: strings.EqualFold(mustURLScheme(cfg.PublicURL), "https"),
 		devices:      newDeviceRegistry(),
-	}, nil
+	}
+	if nc != nil {
+		subscription, subscribeErr := nc.Subscribe(devicePresenceSubject, func(message *nats.Msg) {
+			var device deviceState
+			if json.Unmarshal(message.Data, &device) == nil && device.Username != "" && !device.LastSeen.IsZero() {
+				server.devices.record(device)
+			}
+		})
+		if subscribeErr != nil {
+			return nil, fmt.Errorf("subscribe to managed-client presence: %w", subscribeErr)
+		}
+		if flushErr := nc.FlushTimeout(2 * time.Second); flushErr != nil {
+			_ = subscription.Unsubscribe()
+			return nil, fmt.Errorf("activate managed-client presence subscription: %w", flushErr)
+		}
+		go func() {
+			<-ctx.Done()
+			_ = subscription.Unsubscribe()
+		}()
+	}
+	return server, nil
 }
 
 // Handler returns the complete API router.
@@ -188,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	router.Get("/api/client-config", s.getMachineClientConfig)
 	router.Get("/api/client-events", s.getMachineClientEvents)
 	router.Get("/api/managed-clients", s.listManagedClients)
+	router.Get("/api/managed-client-events", s.getManagedClientEvents)
 	router.Post("/api/enrollments", s.createEnrollment)
 	router.Get("/api/enrollments/{code}", s.getEnrollment)
 	router.Get("/api/enrollments", s.listEnrollments)
@@ -440,7 +493,7 @@ func (s *Server) getMachineClientConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "An Authentik machine token is required.")
 		return
 	}
-	s.devices.touch(deviceState{Username: identity.Username, Name: r.Header.Get("X-LFP-Pipe-Device"), Version: r.Header.Get("X-LFP-Pipe-Version"), Platform: r.Header.Get("X-LFP-Pipe-Platform")})
+	s.recordDevicePresence(identity.Username, r)
 	users, err := s.authentik.ListServiceAccounts(r.Context())
 	if err != nil {
 		s.internalError(w, err)
@@ -474,7 +527,7 @@ func (s *Server) getMachineClientEvents(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("X-Accel-Buffering", "no")
 	updates, unsubscribe := s.devices.subscribe(identity.Username)
 	defer unsubscribe()
-	s.devices.touch(deviceState{Username: identity.Username, Name: r.Header.Get("X-LFP-Pipe-Device"), Version: r.Header.Get("X-LFP-Pipe-Version"), Platform: r.Header.Get("X-LFP-Pipe-Platform")})
+	s.recordDevicePresence(identity.Username, r)
 	_, _ = fmt.Fprint(w, "event: ready\ndata: connected\n\n")
 	flusher.Flush()
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -487,10 +540,30 @@ func (s *Server) getMachineClientEvents(w http.ResponseWriter, r *http.Request) 
 			_, _ = fmt.Fprint(w, "event: config\ndata: changed\n\n")
 			flusher.Flush()
 		case <-heartbeat.C:
-			s.devices.touch(deviceState{Username: identity.Username, Name: r.Header.Get("X-LFP-Pipe-Device"), Version: r.Header.Get("X-LFP-Pipe-Version"), Platform: r.Header.Get("X-LFP-Pipe-Platform")})
+			s.recordDevicePresence(identity.Username, r)
 			_, _ = fmt.Fprint(w, ": keepalive\n\n")
 			flusher.Flush()
 		}
+	}
+}
+
+func (s *Server) recordDevicePresence(username string, r *http.Request) {
+	device := s.devices.touch(deviceState{
+		Username: username,
+		Name:     r.Header.Get("X-LFP-Pipe-Device"),
+		Version:  r.Header.Get("X-LFP-Pipe-Version"),
+		Platform: r.Header.Get("X-LFP-Pipe-Platform"),
+	})
+	if s.nats == nil {
+		return
+	}
+	payload, err := json.Marshal(device)
+	if err != nil {
+		s.logger.Warn("managed-client presence could not be encoded", "error", err)
+		return
+	}
+	if err := s.nats.Publish(devicePresenceSubject, payload); err != nil {
+		s.logger.Warn("managed-client presence could not be published", "error", err)
 	}
 }
 
@@ -500,22 +573,105 @@ func (s *Server) listManagedClients(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Sign in with Authentik to continue.")
 		return
 	}
-	users, err := s.authentik.ListServiceAccounts(r.Context())
+	owned, err := s.ownedManagedClients(r.Context(), session.Subject)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"managed_clients": s.managedClientStates(owned)})
+}
+
+func (s *Server) getManagedClientEvents(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in with Authentik to continue.")
+		return
+	}
+	owned, err := s.ownedManagedClients(r.Context(), session.Subject)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming is unavailable.")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	updates, unsubscribe := s.devices.subscribePresence()
+	defer unsubscribe()
+	lastPayload := ""
+	writePresence := func(force bool) bool {
+		payload, marshalErr := json.Marshal(map[string]any{"managed_clients": s.managedClientStates(owned)})
+		if marshalErr != nil {
+			return false
+		}
+		if !force && string(payload) == lastPayload {
+			_, _ = fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+			return true
+		}
+		lastPayload = string(payload)
+		_, _ = fmt.Fprintf(w, "event: presence\ndata: %s\n\n", payload)
+		flusher.Flush()
+		return true
+	}
+	if !writePresence(true) {
+		return
+	}
+	leaseCheck := time.NewTicker(5 * time.Second)
+	defer leaseCheck.Stop()
+	ownershipRefresh := time.NewTicker(15 * time.Second)
+	defer ownershipRefresh.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-updates:
+			if !writePresence(false) {
+				return
+			}
+		case <-leaseCheck.C:
+			if !writePresence(false) {
+				return
+			}
+		case <-ownershipRefresh.C:
+			refreshed, refreshErr := s.ownedManagedClients(r.Context(), session.Subject)
+			if refreshErr != nil {
+				s.logger.Warn("managed-client event ownership refresh failed", "error", refreshErr)
+				continue
+			}
+			owned = refreshed
+			if !writePresence(false) {
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) ownedManagedClients(ctx context.Context, ownerSubject string) (map[string]authentikapi.User, error) {
+	users, err := s.authentik.ListServiceAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
 	owned := make(map[string]authentikapi.User)
 	for _, user := range users {
 		metadata := metadataFromUser(user)
-		if metadata.Managed && metadata.OwnerSubject == session.Subject {
+		if metadata.Managed && metadata.OwnerSubject == ownerSubject {
 			owned[user.Username] = user
 		}
 	}
+	return owned, nil
+}
+
+func (s *Server) managedClientStates(owned map[string]authentikapi.User) []deviceState {
 	seen := make(map[string]deviceState)
 	for _, device := range s.devices.list() {
 		if _, ok := owned[device.Username]; ok {
-			device.Online = time.Since(device.LastSeen) < 45*time.Second
+			device.Online = time.Since(device.LastSeen) < deviceOnlineLease
+			device.Known = true
 			seen[device.Username] = device
 		}
 	}
@@ -524,10 +680,11 @@ func (s *Server) listManagedClients(w http.ResponseWriter, r *http.Request) {
 		if device, ok := seen[username]; ok {
 			clients = append(clients, device)
 		} else {
-			clients = append(clients, deviceState{Username: username, Name: user.Name})
+			clients = append(clients, deviceState{Username: username, Name: user.Name, Known: false})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"managed_clients": clients})
+	sort.Slice(clients, func(left, right int) bool { return clients[left].Username < clients[right].Username })
+	return clients
 }
 
 func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {

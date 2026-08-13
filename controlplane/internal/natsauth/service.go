@@ -28,6 +28,15 @@ type Service struct {
 	closeErr error
 }
 
+// NATS returns the shared authenticated connection used by control-plane
+// features that must remain consistent across HTTP API replicas.
+func (s *Service) NATS() *nats.Conn {
+	if s == nil {
+		return nil
+	}
+	return s.nats
+}
+
 // Start connects and registers a horizontally scalable Auth Callout endpoint.
 func Start(ctx context.Context, cfg config.Config, tickets *ticket.Signer, logger *slog.Logger) (*Service, error) {
 	issuer, err := nkeys.FromSeed(cfg.NATSAuthIssuerSeed)

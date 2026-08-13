@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
 )
@@ -21,6 +22,55 @@ func TestEntitlementClaimsAcceptNamesAndObjects(t *testing.T) {
 	}
 	if got := entitlementClaims(objectClaims); !reflect.DeepEqual(got, []string{"subdomain.domain"}) {
 		t.Fatalf("unexpected object entitlements %#v", got)
+	}
+}
+
+func TestManagedClientStatesDistinguishUnknownOnlineAndOffline(t *testing.T) {
+	t.Parallel()
+	registry := newDeviceRegistry()
+	registry.record(deviceState{Username: "online", LastSeen: time.Now().UTC(), Online: true})
+	registry.record(deviceState{Username: "offline", LastSeen: time.Now().UTC().Add(-deviceOnlineLease - time.Second), Online: true})
+	server := &Server{devices: registry}
+	owned := map[string]authentikapi.User{
+		"unknown": {Username: "unknown", Name: "Unknown"},
+		"online":  {Username: "online", Name: "Online"},
+		"offline": {Username: "offline", Name: "Offline"},
+	}
+	states := server.managedClientStates(owned)
+	if len(states) != 3 {
+		t.Fatalf("unexpected managed client count %d", len(states))
+	}
+	byUsername := make(map[string]deviceState, len(states))
+	for _, state := range states {
+		byUsername[state.Username] = state
+	}
+	if byUsername["unknown"].Known || byUsername["unknown"].Online {
+		t.Fatalf("unknown presence was reported as authoritative: %#v", byUsername["unknown"])
+	}
+	if !byUsername["online"].Known || !byUsername["online"].Online {
+		t.Fatalf("fresh presence was not online: %#v", byUsername["online"])
+	}
+	if !byUsername["offline"].Known || byUsername["offline"].Online {
+		t.Fatalf("stale presence was not offline: %#v", byUsername["offline"])
+	}
+}
+
+func TestDeviceRegistryRejectsOlderCrossReplicaPresence(t *testing.T) {
+	t.Parallel()
+	registry := newDeviceRegistry()
+	updates, unsubscribe := registry.subscribePresence()
+	defer unsubscribe()
+	newer := deviceState{Username: "client", Name: "new", LastSeen: time.Now().UTC(), Online: true}
+	registry.record(newer)
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("presence subscriber was not notified")
+	}
+	registry.record(deviceState{Username: "client", Name: "old", LastSeen: newer.LastSeen.Add(-time.Minute), Online: true})
+	states := registry.list()
+	if len(states) != 1 || states[0].Name != "new" {
+		t.Fatalf("older presence replaced newer state: %#v", states)
 	}
 }
 

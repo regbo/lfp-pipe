@@ -23,7 +23,7 @@ type TunnelToken = {
 type ServicePrincipal = { id: number; username: string; name: string; client_id: string; entitlement: string };
 type OAuthSettings = { token_url: string; client_id: string; control_plane_url: string; scopes: string[]; nats_urls: string[] };
 type CreatedPrincipal = { service_principal: ServicePrincipal; client_secret: string; oauth: OAuthSettings };
-type ManagedClient = { username: string; name: string; version: string; platform: string; last_seen: string; online?: boolean };
+type ManagedClient = { username: string; name: string; version: string; platform: string; last_seen: string; online: boolean; presence_known: boolean };
 type Enrollment = { code: string; device_id: string; name: string; platform: string; version: string; expires_at: string };
 
 function Brand({ settings }: { settings: BrandSettings }) {
@@ -126,6 +126,24 @@ function App() {
     return () => window.clearInterval(deviceTimer);
   }, []);
 
+  useEffect(() => {
+    const events = new EventSource("/api/managed-client-events", { withCredentials: true });
+    const updatePresence = (event: Event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as { managed_clients: ManagedClient[] };
+        setManagedClients(payload.managed_clients);
+        setDevicesError("");
+      } catch {
+        // The polling fallback remains active if a malformed event is received.
+      }
+    };
+    events.addEventListener("presence", updatePresence);
+    return () => {
+      events.removeEventListener("presence", updatePresence);
+      events.close();
+    };
+  }, []);
+
   const requestedHostname = identity && hostname ? `${hostname}.${identity.required_entitlement}` : "";
   const matchedEntitlement = useMemo(() => {
     if (!requestedHostname) return "";
@@ -225,7 +243,7 @@ function App() {
     const principal = claimed.service_principal;
     setEnrollments((current) => current.filter((candidate) => candidate.code !== enrollment.code));
     setPrincipals((current) => current.some((candidate) => candidate.id === principal.id) ? current : [...current, principal]);
-    setManagedClients((current) => current.some((client) => client.username === principal.username) ? current : [...current, { username: principal.username, name: enrollment.name, version: enrollment.version, platform: enrollment.platform, last_seen: new Date().toISOString(), online: false }]);
+    setManagedClients((current) => current.some((client) => client.username === principal.username) ? current : [...current, { username: principal.username, name: enrollment.name, version: enrollment.version, platform: enrollment.platform, last_seen: "", online: false, presence_known: false }]);
     await editConfig(principal);
   }
 
@@ -311,12 +329,12 @@ http_backend_addr = "127.0.0.1:80"
       <header className="topbar"><Brand settings={brand} /><Menu position="bottom-end" width={150} shadow="md"><Menu.Target><UnstyledButton className="account-menu"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></UnstyledButton></Menu.Target><Menu.Dropdown><Menu.Item color="red" leftSection={<LogOut size={15} aria-hidden="true" />} onClick={logout}>Sign out</Menu.Item></Menu.Dropdown></Menu></header>
       <main className="main" id="main-content"><section className="dashboard">
         <div className="console-grid">
-          <section className="section-card compact-card"><div className="compact-title"><div><h1>Managed clients</h1><p>Install, approve, then manage routes here.</p></div><Badge size="md" variant="light">{managedClients.filter((client) => client.online !== false).length} online</Badge></div>
+          <section className="section-card compact-card"><div className="compact-title"><div><h1>Managed clients</h1><p>Install, approve, then manage routes here.</p></div><Badge size="md" variant="light">{managedClients.filter((client) => client.online === true).length} online</Badge></div>
           <div className="device-panel flat-panel">
             {devicesLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading remote clients…</span></Group> : null}
             {!devicesLoading && devicesError ? <p className="error">{devicesError}</p> : null}
             {enrollments.map((enrollment) => <div className="principal-row" key={enrollment.code}><div><strong>{enrollment.name || enrollment.device_id}</strong><span>{enrollment.platform} · {enrollment.version} · code {enrollment.code}</span></div><Button onClick={() => void claimEnrollment(enrollment)}>Approve and manage</Button></div>)}
-            {managedClients.map((client) => { const principal = principalByUsername.get(client.username); const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; const deleting = deletingPrincipal === principal?.id; const confirming = deleteCandidate === principal?.id; const deleteLabel = deleting ? `Deleting ${client.name || client.username}` : confirming ? `Confirm deletion of ${client.name || client.username}` : `Delete ${client.name || client.username}`; return <div className="managed-client" key={client.username}><div className="principal-row managed-client-row">{principal ? <Checkbox className="route-select managed-client-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></span>} /> : <div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div>}<Group className="managed-client-actions" gap="xs" wrap="nowrap"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button>{principal ? <Button className={`managed-delete${confirming ? " is-confirming" : ""}`} size="xs" color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <Loader size="xs" /> : confirming ? "Confirm" : <Trash2 size={16} aria-hidden="true" />}</Button> : null}</Group></div></div>; })}
+            {managedClients.map((client) => { const principal = principalByUsername.get(client.username); const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; const deleting = deletingPrincipal === principal?.id; const confirming = deleteCandidate === principal?.id; const status = !client.presence_known ? "Checking" : client.online ? "Online" : "Offline"; const statusColor = !client.presence_known ? "yellow" : client.online ? "green" : "gray"; const deleteLabel = deleting ? `Deleting ${client.name || client.username}` : confirming ? `Confirm deletion of ${client.name || client.username}` : `Delete ${client.name || client.username}`; return <div className="managed-client" key={client.username}><div className="principal-row managed-client-row">{principal ? <Checkbox className="route-select managed-client-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></span>} /> : <div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div>}<Group className="managed-client-actions" gap="xs" wrap="nowrap"><Badge size="md" variant="light" color={statusColor}><span className="status-content"><span className="status-dot" aria-hidden="true" />{status}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button>{principal ? <Button className={`managed-delete${confirming ? " is-confirming" : ""}`} size="xs" color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <Loader size="xs" /> : confirming ? "Confirm" : <Trash2 size={16} aria-hidden="true" />}</Button> : null}</Group></div></div>; })}
             {!devicesLoading && !devicesError && managedClients.length === 0 && enrollments.length === 0 ? <p className="empty-entitlement">No desktop clients connected yet. Install and start the client to enroll it.</p> : null}
           </div>
           </section>

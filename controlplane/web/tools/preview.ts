@@ -4,7 +4,7 @@ const port = Number(process.env.LFP_PREVIEW_PORT ?? "4173");
 const root = join(import.meta.dir, "..", "dist");
 const demoUsername = "lfp-pipe-regbodesktop-b9e13326";
 const demoPrincipal = { id: 101, username: demoUsername, name: "REGBODESKTOP · live demo", client_id: "demo-regbodesktop", entitlement: "regbodesktop.pipe.lfpconnect.io" };
-let demoLastSeen = Date.now();
+let demoLastSeen = 0;
 let demoDevice = { name: "REGBODESKTOP", version: "", platform: "" };
 const encoder = new TextEncoder();
 const configs = new Map<number, string>([
@@ -53,6 +53,7 @@ const principals = [demoPrincipal];
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 const bearer = (request: Request) => request.headers.get("authorization") ?? "";
+const managedClients = () => ({ managed_clients: demoLastSeen ? [{ username: demoUsername, ...demoDevice, last_seen: new Date(demoLastSeen).toISOString(), online: Date.now() - demoLastSeen < 45000, presence_known: true }] : [{ username: demoUsername, ...demoDevice, last_seen: "", online: false, presence_known: false }] });
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -62,7 +63,13 @@ Bun.serve({
     if (url.pathname === "/api/branding") return json({ name: "LFP Connect", logo_url: "/assets/lfp-connect-auto.svg", favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61", color_strong: "#e85c50", ink: "#0b1426" });
     if (url.pathname === "/api/me") return json({ subject: "preview-user", name: "Local Preview", email: "preview@lfpconnect.io", entitlements: ["regbodesktop.pipe.lfpconnect.io", "speedtest.pipe.lfpconnect.io"], required_entitlement: "pipe.lfpconnect.io", route_pattern: "*.pipe.lfpconnect.io", control_plane_url: "https://manage-pipe.lfpconnect.io" });
     if (url.pathname === "/api/service-principals" && request.method === "GET") return json({ service_principals: principals });
-    if (url.pathname === "/api/managed-clients") return json({ managed_clients: demoLastSeen ? [{ username: demoUsername, ...demoDevice, last_seen: new Date(demoLastSeen).toISOString(), online: Date.now() - demoLastSeen < 45000 }] : [] });
+    if (url.pathname === "/api/managed-clients") return json(managedClients());
+    if (url.pathname === "/api/managed-client-events") {
+      let timer: ReturnType<typeof setInterval>;
+      let connectTimer: ReturnType<typeof setTimeout>;
+      const stream = new ReadableStream<Uint8Array>({ start(controller) { const send = (payload: object) => controller.enqueue(encoder.encode(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`)); const online = () => ({ managed_clients: [{ username: demoUsername, ...demoDevice, last_seen: new Date().toISOString(), online: true, presence_known: true }] }); send(managedClients()); connectTimer = setTimeout(() => send(online()), 2000); timer = setInterval(() => send(online()), 5000); }, cancel() { clearTimeout(connectTimer); clearInterval(timer); } });
+      return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
     if (url.pathname === "/api/enrollments") return json({ enrollments: [] });
     if (url.pathname === "/api/client-settings") return json({ token_url: "https://auth.lfpconnect.io/application/o/token/", provider_client_id: "lfp-pipe", scopes: ["openid", "profile", "entitlements"] });
     if (url.pathname === "/api/client-config") {
