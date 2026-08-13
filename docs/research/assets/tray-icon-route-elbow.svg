@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">LFP Route Elbow tray icon concept</title>
+  <desc id="desc">A compact pipe elbow that echoes the L in the LFP Connect monogram.</desc>
+  <style>.icon { fill: #ff6f61; }</style>
+  <path class="icon" d="M18 8h32v12h-5v55c0 6 3 9 9 9h54v-5h12v32h-12v-5H52c-19 0-29-10-29-29V20h-5V8Z"/>
+  <rect class="icon" x="13" y="20" width="42" height="11"/>
+  <rect class="icon" x="97" y="74" width="11" height="42"/>
+</svg>

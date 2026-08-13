@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">LFP Pipe P tray icon concept</title>
+  <desc id="desc">A bold lowercase P built like a pipe, with a coupling collar at the base.</desc>
+  <style>.icon { fill: #ff6f61; }</style>
+  <path class="icon" fill-rule="evenodd" d="M27 11h26v17c8-8 19-12 31-12 26 0 42 20 42 47s-16 47-42 47c-12 0-23-4-31-12v4h7v12h-7v9H27v-9h-7v-12h7V11Zm55 29c-17 0-29 9-29 23s12 23 29 23c12 0 20-9 20-23s-8-23-20-23Z"/>
+</svg>

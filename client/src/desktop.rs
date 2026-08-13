@@ -34,6 +34,7 @@ const REMOTE_MANAGED_ID: &str = "remote-managed";
 const MANAGE_ID: &str = "manage";
 const MANAGEMENT_URL_ID: &str = "management-url";
 const EXIT_ID: &str = "exit";
+const DEFAULT_TRAY_ICON_RGBA: [u8; 4] = [255, 111, 97, 255];
 
 #[derive(Debug)]
 enum UserEvent {
@@ -514,16 +515,24 @@ fn make_icon() -> anyhow::Result<Icon> {
     const SIZE: u32 = 32;
     let mut pixmap = Pixmap::new(SIZE, SIZE).ok_or_else(|| anyhow!("create tray icon pixmap"))?;
     let mut paint = Paint::default();
-    paint.set_color_rgba8(255, 111, 97, 255);
+    paint.set_color_rgba8(
+        DEFAULT_TRAY_ICON_RGBA[0],
+        DEFAULT_TRAY_ICON_RGBA[1],
+        DEFAULT_TRAY_ICON_RGBA[2],
+        DEFAULT_TRAY_ICON_RGBA[3],
+    );
     paint.anti_alias = true;
 
-    // Compact version of the coral lowercase LFP monogram used by the web UI.
-    // The geometry is drawn at 140px source scale and fitted into a square so
-    // the same recognizable mark remains crisp in 16px and 32px system trays.
-    let transform = Transform::from_scale(0.16, 0.16).post_translate(1.0, 4.5);
-    for path in [brand_l_path(), brand_f_path(), brand_p_path()] {
-        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-    }
+    // The L-shaped route follows the LFP monogram's posture while the collars
+    // make the tunnel/pipe purpose readable at 16px and 32px tray sizes.
+    let path = route_elbow_path();
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::from_scale(0.25, 0.25),
+        None,
+    );
 
     let mut rgba = pixmap.take();
     // tiny-skia stores premultiplied RGBA while tray-icon accepts straight
@@ -539,66 +548,50 @@ fn make_icon() -> anyhow::Result<Icon> {
     Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| anyhow!(error))
 }
 
-fn brand_l_path() -> tiny_skia::Path {
+fn route_elbow_path() -> tiny_skia::Path {
     let mut path = PathBuilder::new();
-    path.move_to(12.0, 8.0);
-    path.line_to(38.0, 8.0);
-    path.line_to(38.0, 99.0);
-    path.cubic_to(38.0, 108.0, 43.0, 113.0, 53.0, 113.0);
-    path.line_to(58.0, 113.0);
-    path.line_to(58.0, 136.0);
-    path.line_to(46.0, 136.0);
-    path.cubic_to(24.0, 136.0, 12.0, 123.0, 12.0, 101.0);
+    path.move_to(18.0, 8.0);
+    path.line_to(50.0, 8.0);
+    path.line_to(50.0, 20.0);
+    path.line_to(45.0, 20.0);
+    path.line_to(45.0, 75.0);
+    path.cubic_to(45.0, 81.0, 48.0, 84.0, 54.0, 84.0);
+    path.line_to(108.0, 84.0);
+    path.line_to(108.0, 79.0);
+    path.line_to(120.0, 79.0);
+    path.line_to(120.0, 111.0);
+    path.line_to(108.0, 111.0);
+    path.line_to(108.0, 106.0);
+    path.line_to(52.0, 106.0);
+    path.cubic_to(33.0, 106.0, 23.0, 96.0, 23.0, 77.0);
+    path.line_to(23.0, 20.0);
+    path.line_to(18.0, 20.0);
     path.close();
-    path.finish().expect("valid brand L path")
-}
 
-fn brand_f_path() -> tiny_skia::Path {
-    let mut path = PathBuilder::new();
-    path.move_to(61.0, 136.0);
-    path.line_to(61.0, 61.0);
-    path.line_to(49.0, 61.0);
-    path.line_to(49.0, 39.0);
-    path.line_to(61.0, 39.0);
-    path.line_to(61.0, 34.0);
-    path.cubic_to(61.0, 13.0, 73.0, 2.0, 95.0, 2.0);
-    path.line_to(115.0, 2.0);
-    path.line_to(115.0, 25.0);
-    path.line_to(98.0, 25.0);
-    path.cubic_to(90.0, 25.0, 87.0, 29.0, 87.0, 36.0);
-    path.line_to(87.0, 39.0);
-    path.line_to(115.0, 39.0);
-    path.line_to(115.0, 61.0);
-    path.line_to(87.0, 61.0);
-    path.line_to(87.0, 136.0);
+    // Coupling collars at each end of the route.
+    path.move_to(13.0, 20.0);
+    path.line_to(55.0, 20.0);
+    path.line_to(55.0, 31.0);
+    path.line_to(13.0, 31.0);
     path.close();
-    path.finish().expect("valid brand F path")
-}
-
-fn brand_p_path() -> tiny_skia::Path {
-    let mut path = PathBuilder::new();
-    path.move_to(94.0, 39.0);
-    path.line_to(119.0, 39.0);
-    path.line_to(119.0, 48.0);
-    path.cubic_to(127.0, 40.0, 137.0, 36.0, 148.0, 36.0);
-    path.cubic_to(175.0, 36.0, 190.0, 57.0, 190.0, 86.0);
-    path.cubic_to(190.0, 115.0, 175.0, 136.0, 148.0, 136.0);
-    path.cubic_to(137.0, 136.0, 128.0, 132.0, 120.0, 125.0);
-    path.line_to(120.0, 140.0);
-    path.line_to(94.0, 140.0);
+    path.move_to(97.0, 74.0);
+    path.line_to(108.0, 74.0);
+    path.line_to(108.0, 116.0);
+    path.line_to(97.0, 116.0);
     path.close();
-    path.move_to(142.0, 113.0);
-    path.cubic_to(156.0, 113.0, 164.0, 102.0, 164.0, 86.0);
-    path.cubic_to(164.0, 70.0, 156.0, 59.0, 142.0, 59.0);
-    path.cubic_to(128.0, 59.0, 119.0, 70.0, 119.0, 86.0);
-    path.cubic_to(119.0, 102.0, 128.0, 113.0, 142.0, 113.0);
-    path.close();
-    path.finish().expect("valid brand P path")
+    path.finish().expect("valid route elbow path")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::compact_status;
+    use super::{compact_status, route_elbow_path};
+
+    #[test]
+    fn tray_icon_geometry_fits_source_view_box() {
+        let bounds = route_elbow_path().bounds();
+        assert_eq!((bounds.left(), bounds.top()), (13.0, 8.0));
+        assert_eq!((bounds.right(), bounds.bottom()), (120.0, 116.0));
+    }
 
     #[test]
     fn tray_status_is_single_line_and_bounded() {
