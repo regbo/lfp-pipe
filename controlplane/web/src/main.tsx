@@ -78,6 +78,10 @@ function App() {
     const managedUsernames = new Set(managedClients.map((client) => client.username));
     return principals.filter((principal) => !managedUsernames.has(principal.username));
   }, [managedClients, principals]);
+  const principalByUsername = useMemo(
+    () => new Map(principals.map((principal) => [principal.username, principal])),
+    [principals],
+  );
 
   async function loadPrincipals() {
     setPrincipalsLoading(true); setPrincipalsError("");
@@ -157,6 +161,8 @@ function App() {
     try {
       await api<void>(`/api/service-principals/${principal.id}`, { method: "DELETE" });
       if (createdPrincipal?.service_principal.id === principal.id) setCreatedPrincipal(null);
+      if (editingPrincipal?.id === principal.id) setEditingPrincipal(null);
+      setSelectedPrincipals((current) => current.filter((id) => id !== principal.id));
       setDeleteCandidate(null);
       await loadPrincipals();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Deletion failed."); }
@@ -301,7 +307,7 @@ http_backend_addr = "127.0.0.1:80"
             {devicesLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading remote clients…</span></Group> : null}
             {!devicesLoading && devicesError ? <p className="error">{devicesError}</p> : null}
             {enrollments.map((enrollment) => <div className="principal-row" key={enrollment.code}><div><strong>{enrollment.name || enrollment.device_id}</strong><span>{enrollment.platform} · {enrollment.version} · code {enrollment.code}</span></div><Button onClick={() => void claimEnrollment(enrollment)}>Approve and manage</Button></div>)}
-            {managedClients.map((client) => { const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; return <div className="managed-client" key={client.username}><div className="principal-row"><div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div><Group gap="xs"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button></Group></div>
+            {managedClients.map((client) => { const principal = principalByUsername.get(client.username); const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; const deleting = deletingPrincipal === principal?.id; const confirming = deleteCandidate === principal?.id; const deleteLabel = deleting ? `Deleting ${client.name || client.username}` : confirming ? `Confirm deletion of ${client.name || client.username}` : `Delete ${client.name || client.username}`; return <div className="managed-client" key={client.username}><div className="principal-row managed-client-row">{principal ? <Checkbox className="route-select managed-client-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></span>} /> : <div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div>}<Group className="managed-client-actions" gap="xs" wrap="nowrap"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button>{principal ? <Button className={`managed-delete${confirming ? " is-confirming" : ""}`} size="xs" color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <Loader size="xs" /> : confirming ? "Confirm" : <Trash2 size={16} aria-hidden="true" />}</Button> : null}</Group></div>
               {isManaging ? <div className="client-config-panel"><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><Group className="config-footer" justify="space-between" align="center"><Badge color={saveState === "Saved" ? "green" : "gray"} variant="light">{saveState}</Badge><Button.Group><Button variant="light" leftSection={<Download size={16} />} onClick={exportCurrentConfig}>Export</Button><Button variant="default" onClick={() => setEditingPrincipal(null)}>Close</Button></Button.Group></Group></div> : null}
             </div>; })}
             {!devicesLoading && !devicesError && managedClients.length === 0 && enrollments.length === 0 ? <p className="empty-entitlement">No desktop clients connected yet. Install and start the client to enroll it.</p> : null}
