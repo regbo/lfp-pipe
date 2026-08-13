@@ -52,5 +52,5 @@
   --content-width: 1120px;
   --page-gutter: clamp(0.75rem, 2vw, 1rem);
   --content-gap: clamp(0.75rem, 1.8vw, 1.25rem);
-  --loader-duration: 3s;
+  --loader-duration: 2.4s;
 }

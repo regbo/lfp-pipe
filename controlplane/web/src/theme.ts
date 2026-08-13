@@ -64,7 +64,10 @@ export const appTheme = createTheme({
     TextInput: TextInput.extend({ defaultProps: { size: "xs" } }),
     Select: Select.extend({ defaultProps: { size: "xs", allowDeselect: false } }),
     Button: Button.extend({ defaultProps: { size: "xs", color: "coral" } }),
-    Loader: Loader.extend({ defaultProps: { color: "var(--color-brand)", type: "oval" } }),
+    Loader: Loader.extend({
+      defaultProps: { color: "var(--color-brand)", type: "dots" },
+      classNames: { root: "app-loader" },
+    }),
     InputWrapper: Input.Wrapper.extend({ defaultProps: { inputWrapperOrder: ["label", "input", "description", "error"] } }),
   },
 });

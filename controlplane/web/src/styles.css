@@ -80,7 +80,7 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .button.secondary { background: transparent; color: var(--color-text); border: 1px solid var(--color-line-strong); }
 .button.compact { min-height: 2.45rem; padding: 0.55rem 0.8rem; font-size: 0.82rem; }
 .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-.mantine-Loader-root::after { animation-duration: var(--loader-duration); }
+.app-loader *, .app-loader *::before, .app-loader *::after { animation-duration: var(--loader-duration) !important; }
 
 .identity { display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 0.8rem; border: 1px solid var(--color-line); border-radius: var(--radius-md); }
 .account-menu { min-width: 0; padding: 0.45rem 0.55rem; display: flex; align-items: center; gap: 0.65rem; color: var(--color-text); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); cursor: pointer; }
@@ -151,15 +151,20 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .field-span-wide { grid-column: span 2; }
 .field-span-full { grid-column: 1 / -1; }
 .settings-disclosure .mantine-Accordion-item,
-.route-disclosure .mantine-Accordion-item { border-color: var(--color-line); background: transparent; }
-.settings-disclosure .mantine-Accordion-control { min-height: 2.4rem; padding-inline: 0; color: var(--color-muted); font-size: 0.75rem; font-weight: 750; }
-.settings-disclosure .mantine-Accordion-chevron { display: none; }
-.settings-disclosure .mantine-Accordion-content { padding: 0.35rem 0 0.4rem; }
+.route-disclosure .mantine-Accordion-item { overflow: hidden; border: 1px solid var(--color-line); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--field-background) 72%, transparent); }
+.settings-disclosure .mantine-Accordion-control,
+.route-disclosure .mantine-Accordion-control { padding-inline: 0.8rem; transition: background 140ms ease, color 140ms ease; }
+.settings-disclosure .mantine-Accordion-control:hover,
+.route-disclosure .mantine-Accordion-control:hover,
+.settings-disclosure .mantine-Accordion-control[aria-expanded="true"],
+.route-disclosure .mantine-Accordion-control[aria-expanded="true"] { color: var(--color-text); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
+.settings-disclosure .mantine-Accordion-control { min-height: 2.65rem; color: var(--color-muted); font-size: 0.75rem; font-weight: 750; }
+.settings-disclosure .mantine-Accordion-content { padding: 0.75rem 0.9rem 1rem; }
 .settings-group { display: grid; gap: 0.55rem; }
 .settings-group + .settings-group { padding-top: 1rem; border-top: 1px solid var(--color-line); }
 .settings-group h3 { margin: 0; color: var(--color-muted); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .route-disclosure .mantine-Accordion-control { min-height: 2.25rem; color: var(--color-muted); font-size: 0.72rem; font-weight: 700; }
-.route-disclosure .mantine-Accordion-content { padding: 0.15rem 0.7rem 0.7rem; }
+.route-disclosure .mantine-Accordion-content { padding: 0.65rem 0.8rem 0.85rem; }
 .structured-config .mantine-InputWrapper-label { font-size: 0.69rem; font-weight: 750; letter-spacing: 0.035em; text-transform: uppercase; }
 .structured-config .mantine-Input-input { font-size: 0.78rem; }
 .structured-config .mantine-InputWrapper-description { font-size: 0.65rem; }
@@ -208,8 +213,6 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 .status-dot { width: 0.42rem; height: 0.42rem; flex: none; display: block; border-radius: 50%; background: currentColor; }
 .save-state { align-self: center; min-width: 6rem; }
 .loading { min-height: 100vh; display: grid; place-items: center; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
 @media (max-width: 1100px) {
   .compact-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .compact-form > .mantine-Button-root { grid-column: 1 / -1; }
@@ -260,4 +263,5 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  .app-loader, .app-loader *, .app-loader *::before, .app-loader *::after { animation: none !important; }
 }

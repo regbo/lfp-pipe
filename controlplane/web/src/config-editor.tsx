@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Check, Plus, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
 import { Accordion, ActionIcon, Button, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
 
@@ -52,7 +52,7 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
         <TextField className="field-span-full" label="NATS URL" value={text(defaults.nats_url)} onChange={(value) => setDefault("nats_url", value)} />
       </SimpleGrid>
       <Accordion className="settings-disclosure" variant="contained">
-        <Accordion.Item value="advanced"><Accordion.Control icon={<ChevronDown size={14} aria-hidden="true" />}>Advanced common settings</Accordion.Control><Accordion.Panel><Stack gap="lg">
+        <Accordion.Item value="advanced"><Accordion.Control>Advanced common settings</Accordion.Control><Accordion.Panel><Stack gap="lg">
           <SettingsGroup title="Transport">
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
               <SelectField label="Relay mode" value={text(defaults.relay_mode) || "auto"} options={["auto", "buffered", "splice"]} onChange={(value) => setDefault("relay_mode", value)} />
@@ -141,7 +141,7 @@ function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, up
 }
 
 type TextFieldProps = { label: string; value: string; onChange: (value: string) => void; hint?: string; className?: string };
-function TextField({ onChange, hint, label, ...props }: TextFieldProps) { return <TextInput {...props} label={label} name={label.toLowerCase().replace(/[^a-z0-9]+/g, "-")} autoComplete="off" description={hint} size="xs" onChange={(event) => onChange(event.currentTarget.value)} />; }
+function TextField({ onChange, hint, label, ...props }: TextFieldProps) { return <TextInput {...props} label={label} name={label.toLowerCase().replace(/[^a-z0-9]+/g, "-")} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" description={hint} size="xs" onChange={(event) => onChange(event.currentTarget.value)} />; }
 function NumberField({ label, value, suffix, onChange }: { label: string; value: number; suffix?: string; onChange: (value: number) => void }) { return <NumberInput label={label} value={value} suffix={suffix} size="xs" min={0} onChange={(next) => onChange(Number(next) || 0)} />; }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <Select label={label} value={value} data={options} size="xs" allowDeselect={false} onChange={(next) => next !== null && onChange(next)} />; }
 function CheckboxField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
