@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
-import { Accordion, ActionIcon, Button, Checkbox, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
+import { Accordion, ActionIcon, Button, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
 
 type Table = Record<string, unknown>;
 type Route = Table & { path_routes?: PathRoute[] };
@@ -144,4 +144,10 @@ type TextFieldProps = { label: string; value: string; onChange: (value: string) 
 function TextField({ onChange, hint, label, ...props }: TextFieldProps) { return <TextInput {...props} label={label} name={label.toLowerCase().replace(/[^a-z0-9]+/g, "-")} autoComplete="off" description={hint} size="xs" onChange={(event) => onChange(event.currentTarget.value)} />; }
 function NumberField({ label, value, suffix, onChange }: { label: string; value: number; suffix?: string; onChange: (value: number) => void }) { return <NumberInput label={label} value={value} suffix={suffix} size="xs" min={0} onChange={(next) => onChange(Number(next) || 0)} />; }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <Select label={label} value={value} data={options} size="xs" allowDeselect={false} onChange={(next) => next !== null && onChange(next)} />; }
-function CheckboxField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) { return <Checkbox size="sm" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} label={label} />; }
+function CheckboxField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return <label className="checkbox-field" data-checked={checked || undefined}>
+    <input type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
+    <span className="checkbox-mark" aria-hidden="true">{checked ? <Check size={14} strokeWidth={3} /> : null}</span>
+    <span>{label}</span>
+  </label>;
+}

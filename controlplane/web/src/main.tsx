@@ -1,8 +1,9 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
-import { ArrowRight, Check, Copy, Download, KeyRound, LogOut, Server, ShieldCheck, Trash2 } from "lucide-react";
-import { Badge, Button, Checkbox, Divider, Group, Loader, MantineProvider, Menu, Select, TextInput, UnstyledButton } from "@mantine/core";
+import { Check, ChevronDown, Clock3, Copy, Download, KeyRound, LogOut, Trash2 } from "lucide-react";
+import { Badge, Button, Checkbox, Group, Loader, MantineProvider, Menu, Modal, Select, TextInput, UnstyledButton } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { ConfigEditor } from "./config-editor";
 import { appTheme, applyBrand, defaultBrand, type BrandSettings } from "./theme";
 import "@mantine/core/styles.css";
@@ -63,14 +64,15 @@ function App() {
   const [editingPrincipal, setEditingPrincipal] = useState<ServicePrincipal | null>(null);
   const [loadingConfigFor, setLoadingConfigFor] = useState("");
   const [centralConfig, setCentralConfig] = useState("");
+  const [savedConfig, setSavedConfig] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
-  const [saveState, setSaveState] = useState("Saved");
+  const [discardConfigOpen, setDiscardConfigOpen] = useState(false);
   const [managedClients, setManagedClients] = useState<ManagedClient[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [devicesError, setDevicesError] = useState("");
-  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
-  const skipNextConfigSave = useRef(false);
+  const [creationMode, setCreationMode] = useState<"access" | "temporary" | null>(null);
+  const fullScreenConfig = useMediaQuery("(max-width: 520px)");
 
   const effectiveEntitlements = useMemo(() =>
     Array.from(new Set((identity?.entitlements ?? []).map(normalizeEntitlement))).sort(), [identity]);
@@ -82,6 +84,7 @@ function App() {
     () => new Map(principals.map((principal) => [principal.username, principal])),
     [principals],
   );
+  const configDirty = editingPrincipal !== null && centralConfig !== savedConfig;
 
   async function loadPrincipals() {
     setPrincipalsLoading(true); setPrincipalsError("");
@@ -151,6 +154,7 @@ function App() {
       });
       setCreatedPrincipal(created);
       setPrincipalName("");
+      setCreationMode(null);
       await loadPrincipals();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Service principal creation failed."); }
     finally { setCreatingPrincipal(false); }
@@ -182,33 +186,38 @@ function App() {
     setError(""); setLoadingConfigFor(principal.username);
     try {
       const response = await api<{ config_toml: string }>(`/api/service-principals/${principal.id}/config`);
-      skipNextConfigSave.current = true;
       setCentralConfig(response.config_toml);
+      setSavedConfig(response.config_toml);
       setEditingPrincipal(principal);
-      setSaveState("Saved");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Configuration could not be loaded."); }
     finally { setLoadingConfigFor(""); }
   }
 
   async function saveConfig() {
-    if (!editingPrincipal) return;
-    setConfigSaving(true); setSaveState("Saving…"); setError("");
+    if (!editingPrincipal || !configDirty) return;
+    const principal = editingPrincipal;
+    const configToSave = centralConfig;
+    setConfigSaving(true); setError("");
     try {
-      await api(`/api/service-principals/${editingPrincipal.id}/config`, {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config_toml: centralConfig }),
+      await api(`/api/service-principals/${principal.id}/config`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config_toml: configToSave }),
       });
-      setSaveState("Saved");
-    } catch (cause) { setSaveState("Save failed"); setError(cause instanceof Error ? cause.message : "Configuration could not be saved."); }
+      setSavedConfig(configToSave);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Configuration could not be saved."); }
     finally { setConfigSaving(false); }
   }
 
-  useEffect(() => {
-    if (!editingPrincipal || !centralConfig) return;
-    if (skipNextConfigSave.current) { skipNextConfigSave.current = false; return; }
-    setSaveState("Unsaved changes");
-    const timer = window.setTimeout(() => void saveConfig(), 900);
-    return () => window.clearTimeout(timer);
-  }, [centralConfig]);
+  function requestCloseConfig() {
+    if (configSaving) return;
+    if (configDirty) { setDiscardConfigOpen(true); return; }
+    setEditingPrincipal(null);
+  }
+
+  function discardConfigChanges() {
+    setCentralConfig(savedConfig);
+    setDiscardConfigOpen(false);
+    setEditingPrincipal(null);
+  }
 
   async function claimEnrollment(enrollment: Enrollment) {
     setError("");
@@ -299,7 +308,7 @@ http_backend_addr = "127.0.0.1:80"
   return (
     <div className="shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <header className="topbar"><Brand settings={brand} /><Menu position="bottom-end" width={240} shadow="md"><Menu.Target><UnstyledButton className="account-menu"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></UnstyledButton></Menu.Target><Menu.Dropdown><Menu.Label>Account</Menu.Label><Menu.Item color="red" leftSection={<LogOut size={15} />} onClick={logout}>Sign out</Menu.Item></Menu.Dropdown></Menu></header>
+      <header className="topbar"><Brand settings={brand} /><Menu position="bottom-end" width={150} shadow="md"><Menu.Target><UnstyledButton className="account-menu"><span className="avatar">{(identity.name || identity.email || "A")[0]?.toUpperCase()}</span><span className="identity-copy"><strong>{identity.name || "Authentik user"}</strong><span>{identity.email || identity.subject}</span></span></UnstyledButton></Menu.Target><Menu.Dropdown><Menu.Item color="red" leftSection={<LogOut size={15} aria-hidden="true" />} onClick={logout}>Sign out</Menu.Item></Menu.Dropdown></Menu></header>
       <main className="main" id="main-content"><section className="dashboard">
         <div className="console-grid">
           <section className="section-card compact-card"><div className="compact-title"><div><h1>Managed clients</h1><p>Install, approve, then manage routes here.</p></div><Badge size="md" variant="light">{managedClients.filter((client) => client.online !== false).length} online</Badge></div>
@@ -307,15 +316,14 @@ http_backend_addr = "127.0.0.1:80"
             {devicesLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading remote clients…</span></Group> : null}
             {!devicesLoading && devicesError ? <p className="error">{devicesError}</p> : null}
             {enrollments.map((enrollment) => <div className="principal-row" key={enrollment.code}><div><strong>{enrollment.name || enrollment.device_id}</strong><span>{enrollment.platform} · {enrollment.version} · code {enrollment.code}</span></div><Button onClick={() => void claimEnrollment(enrollment)}>Approve and manage</Button></div>)}
-            {managedClients.map((client) => { const principal = principalByUsername.get(client.username); const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; const deleting = deletingPrincipal === principal?.id; const confirming = deleteCandidate === principal?.id; const deleteLabel = deleting ? `Deleting ${client.name || client.username}` : confirming ? `Confirm deletion of ${client.name || client.username}` : `Delete ${client.name || client.username}`; return <div className="managed-client" key={client.username}><div className="principal-row managed-client-row">{principal ? <Checkbox className="route-select managed-client-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></span>} /> : <div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div>}<Group className="managed-client-actions" gap="xs" wrap="nowrap"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button>{principal ? <Button className={`managed-delete${confirming ? " is-confirming" : ""}`} size="xs" color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <Loader size="xs" /> : confirming ? "Confirm" : <Trash2 size={16} aria-hidden="true" />}</Button> : null}</Group></div>
-              {isManaging ? <div className="client-config-panel"><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><Group className="config-footer" justify="space-between" align="center"><Badge color={saveState === "Saved" ? "green" : "gray"} variant="light">{saveState}</Badge><Button.Group><Button variant="light" leftSection={<Download size={16} />} onClick={exportCurrentConfig}>Export</Button><Button variant="default" onClick={() => setEditingPrincipal(null)}>Close</Button></Button.Group></Group></div> : null}
-            </div>; })}
+            {managedClients.map((client) => { const principal = principalByUsername.get(client.username); const isManaging = editingPrincipal?.username === client.username; const isLoading = loadingConfigFor === client.username; const deleting = deletingPrincipal === principal?.id; const confirming = deleteCandidate === principal?.id; const deleteLabel = deleting ? `Deleting ${client.name || client.username}` : confirming ? `Confirm deletion of ${client.name || client.username}` : `Delete ${client.name || client.username}`; return <div className="managed-client" key={client.username}><div className="principal-row managed-client-row">{principal ? <Checkbox className="route-select managed-client-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></span>} /> : <div><strong>{client.name || client.username}</strong><span>{[client.platform, client.version].filter(Boolean).join(" · ") || "Waiting for client"}</span></div>}<Group className="managed-client-actions" gap="xs" wrap="nowrap"><Badge size="md" variant="light" color={client.online !== false ? "green" : "gray"}><span className="status-content"><span className="status-dot" aria-hidden="true" />{client.online !== false ? "Online" : "Offline"}</span></Badge><Button className="manage-button" variant={isManaging ? "filled" : "light"} loading={isLoading} disabled={Boolean(loadingConfigFor) && !isLoading} onClick={() => void manageClient(client)}>{isManaging ? "Managing" : "Manage"}</Button>{principal ? <Button className={`managed-delete${confirming ? " is-confirming" : ""}`} size="xs" color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <Loader size="xs" /> : confirming ? "Confirm" : <Trash2 size={16} aria-hidden="true" />}</Button> : null}</Group></div></div>; })}
             {!devicesLoading && !devicesError && managedClients.length === 0 && enrollments.length === 0 ? <p className="empty-entitlement">No desktop clients connected yet. Install and start the client to enroll it.</p> : null}
           </div>
           </section>
 
-          <section className="section-card compact-card"><div className="compact-title"><div><h2>Automation access</h2><p>Machine credentials for agents, servers, and scripts.</p></div><Button variant="subtle" onClick={() => setShowAdvancedTools((value) => !value)}>{showAdvancedTools ? "Cancel" : "New"}</Button></div>
-          {showAdvancedTools ? <form className="compact-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}><TextInput aria-label="Client name" value={principalName} onChange={(event) => setPrincipalName(event.currentTarget.value)} placeholder="Client name" disabled={creatingPrincipal} required /><Select aria-label="Entitlement" value={principalEntitlement} onChange={(value) => setPrincipalEntitlement(value ?? "")} data={effectiveEntitlements} disabled={creatingPrincipal} required /><Button disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? "Creating…" : "Create"}</Button></form> : null}
+          <section className="section-card compact-card"><div className="compact-title"><div><h2>Automation access</h2><p>Machine credentials for agents, servers, and scripts.</p></div><Menu position="bottom-end" width={210} shadow="md"><Menu.Target><Button variant="subtle" rightSection={<ChevronDown size={14} aria-hidden="true" />}>New</Button></Menu.Target><Menu.Dropdown><Menu.Item leftSection={<KeyRound size={16} aria-hidden="true" />} onClick={() => setCreationMode("access")}>Machine access</Menu.Item><Menu.Item leftSection={<Clock3 size={16} aria-hidden="true" />} onClick={() => setCreationMode("temporary")}>Temporary credential</Menu.Item></Menu.Dropdown></Menu></div>
+          {creationMode === "access" ? <div className="creation-panel"><div className="creation-panel-heading"><strong>Machine access</strong><button className="text-button" type="button" onClick={() => setCreationMode(null)}>Cancel</button></div><form className="compact-form" onSubmit={createPrincipal} aria-busy={creatingPrincipal}><TextInput aria-label="Client name" value={principalName} onChange={(event) => setPrincipalName(event.currentTarget.value)} placeholder="Client name" disabled={creatingPrincipal} required /><Select aria-label="Entitlement" value={principalEntitlement} onChange={(value) => setPrincipalEntitlement(value ?? "")} data={effectiveEntitlements} disabled={creatingPrincipal} required /><Button disabled={creatingPrincipal || !principalEntitlement}>{creatingPrincipal ? "Creating…" : "Create"}</Button></form></div> : null}
+          {creationMode === "temporary" ? <div className="creation-panel"><div className="creation-panel-heading"><strong>Temporary credential</strong><button className="text-button" type="button" onClick={() => setCreationMode(null)}>Cancel</button></div><form className="temporary-credential" onSubmit={issue}><div className="compact-form"><TextInput aria-label="Tunnel client" value={clientName} onChange={(event) => setClientName(event.currentTarget.value)} placeholder="Client name" required /><TextInput aria-label="Subdomain" value={hostname} onChange={(event) => setHostname(event.currentTarget.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} placeholder="Subdomain" required /><Button disabled={!matchedEntitlement || working}>{working ? "Issuing…" : "Issue"}</Button></div><p className="helper">{matchedEntitlement ? `Authorized under ${matchedEntitlement}` : "Enter an entitled subdomain."}</p>{issued ? <Button type="button" variant="subtle" onClick={() => copy("token", issued.token)}>Copy issued token</Button> : null}</form></div> : null}
 
           {createdPrincipal && <div className="secret-once" role="status">
             <div><strong>Copy this secret now</strong><span>It will not be shown again.</span></div>
@@ -329,12 +337,17 @@ http_backend_addr = "127.0.0.1:80"
             {principalsLoading ? <Group className="inline-loading" gap="xs" role="status"><Loader size="xs" /><span>Loading Authentik policies…</span></Group> : principalsError ? <p className="error">{principalsError}</p> : automationPrincipals.map((principal) => { const deleting = deletingPrincipal === principal.id; const confirming = deleteCandidate === principal.id; const deleteLabel = deleting ? `Deleting ${principal.username}` : confirming ? `Confirm deletion of ${principal.username}` : `Delete ${principal.username}`; return <div className="principal-row" key={principal.id} aria-busy={deleting}><Checkbox className="route-select" checked={selectedPrincipals.includes(principal.id)} onChange={() => togglePrincipal(principal.id)} label={<span><strong>{principal.username}</strong><span>{principal.client_id || "Machine credential"} · {principal.entitlement}</span></span>} /><Button color="red" variant={confirming ? "filled" : "subtle"} title={deleteLabel} aria-label={deleteLabel} disabled={deletingPrincipal !== null} onClick={() => confirming ? void deletePrincipal(principal) : setDeleteCandidate(principal.id)}>{deleting ? <><Loader size="xs" />Deleting…</> : confirming ? "Confirm" : <Trash2 size={17} aria-hidden="true" />}</Button></div>; })}
           </div>
           {selectedPrincipals.length > 0 ? <div className="list-footer"><span>{selectedPrincipals.length} selected</span><Button variant="light" leftSection={<Download size={15} />} onClick={() => void downloadSelectedConfigs()}>Export selected</Button></div> : null}
-          <Divider label="Temporary credential" labelPosition="left" />
-          <form className="temporary-credential" onSubmit={issue}><div className="compact-form"><TextInput aria-label="Tunnel client" value={clientName} onChange={(event) => setClientName(event.currentTarget.value)} placeholder="Client name" required /><TextInput aria-label="Subdomain" value={hostname} onChange={(event) => setHostname(event.currentTarget.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} placeholder="Subdomain" required /><Button disabled={!matchedEntitlement || working}>{working ? "Issuing…" : "Issue"}</Button></div><p className="helper">{matchedEntitlement ? `Authorized under ${matchedEntitlement}` : "Enter an entitled subdomain."}</p>{issued ? <Button type="button" variant="subtle" onClick={() => copy("token", issued.token)}>Copy issued token</Button> : null}</form>
           </section>
         </div>
         {error && <p className="error global-error" role="alert">{error}</p>}
       </section></main>
+      <Modal opened={editingPrincipal !== null} onClose={requestCloseConfig} title={editingPrincipal ? `Manage ${editingPrincipal.name || editingPrincipal.client_id}` : "Manage client"} size="xl" centered fullScreen={fullScreenConfig} closeButtonProps={{ disabled: configSaving, "aria-label": "Close configuration" }} classNames={{ content: "manage-config-content", body: "manage-config-body" }}>
+        {editingPrincipal ? <div className="manage-config-editor"><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><Group className="config-footer" justify="space-between" align="center"><Badge color={configDirty ? "yellow" : "green"} variant="light">{configSaving ? "Saving…" : configDirty ? "Unsaved changes" : "Saved"}</Badge><Group className="config-footer-actions" gap="xs"><Button variant="light" leftSection={<Download size={16} />} onClick={exportCurrentConfig}>Export</Button><Button variant="default" disabled={configSaving} onClick={requestCloseConfig}>Close</Button><Button className="save-config-button" loading={configSaving} disabled={!configDirty} onClick={() => void saveConfig()}>Save changes</Button></Group></Group></div> : null}
+      </Modal>
+      <Modal opened={discardConfigOpen} onClose={() => setDiscardConfigOpen(false)} title="Discard unsaved changes?" size="sm" centered>
+        <p className="discard-config-copy">This client configuration has changes that have not been saved.</p>
+        <Group justify="flex-end"><Button variant="default" onClick={() => setDiscardConfigOpen(false)}>Keep editing</Button><Button color="red" onClick={discardConfigChanges}>Discard changes</Button></Group>
+      </Modal>
     </div>
   );
 }
