@@ -674,15 +674,15 @@ mod tests {
 
     #[test]
     fn parses_bearer_header_case_insensitively() {
-        let request = b"POST /api/generate HTTP/1.1\r\nHost: ollama.example\r\nauthorization: bearer abc.def.ghi\r\n\r\n";
+        let request = b"POST /api/jobs HTTP/1.1\r\nHost: service.example\r\nauthorization: bearer abc.def.ghi\r\n\r\n";
         assert_eq!(bearer_token(request).expect("bearer"), "abc.def.ghi");
     }
 
     #[test]
     fn reads_nested_string_role_claims() {
-        let claims = json!({"realm_access": {"roles": ["ollama-user", "admin"]}});
+        let claims = json!({"realm_access": {"roles": ["service-user", "admin"]}});
         let roles = claim_strings(&claims, "realm_access.roles").expect("roles");
-        assert!(roles.contains("ollama-user"));
+        assert!(roles.contains("service-user"));
     }
 
     #[test]
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn removes_bearer_token_before_forwarding() {
-        let request = b"POST /api/generate HTTP/1.1\r\nHost: ollama.example\r\nAuthorization: Bearer secret\r\nContent-Length: 2\r\n\r\n{}";
+        let request = b"POST /api/jobs HTTP/1.1\r\nHost: service.example\r\nAuthorization: Bearer secret\r\nContent-Length: 2\r\n\r\n{}";
         let stripped = strip_authorization_header(request).expect("stripped request");
         assert!(
             !stripped
@@ -711,10 +711,10 @@ mod tests {
 
     #[test]
     fn strips_routing_prefix_and_preserves_query_and_body() {
-        let request = b"POST /ollama/api/chat?stream=false HTTP/1.1\r\nHost: models.example\r\nContent-Length: 2\r\n\r\n{}".to_vec();
-        assert_eq!(request_path(&request).expect("path"), "/ollama/api/chat");
-        let rewritten = strip_request_path_prefix(request, "/ollama").expect("rewritten");
-        assert!(rewritten.starts_with(b"POST /api/chat?stream=false HTTP/1.1\r\n"));
+        let request = b"POST /gateway/api/jobs?stream=false HTTP/1.1\r\nHost: service.example\r\nContent-Length: 2\r\n\r\n{}".to_vec();
+        assert_eq!(request_path(&request).expect("path"), "/gateway/api/jobs");
+        let rewritten = strip_request_path_prefix(request, "/gateway").expect("rewritten");
+        assert!(rewritten.starts_with(b"POST /api/jobs?stream=false HTTP/1.1\r\n"));
         assert!(rewritten.ends_with(b"\r\n\r\n{}"));
     }
 

@@ -151,9 +151,9 @@ mod tests {
 
     #[test]
     fn path_prefix_requires_a_segment_boundary() {
-        assert!(matches_path_prefix("/ollama", "/ollama/api/tags"));
-        assert!(matches_path_prefix("/ollama", "/ollama"));
-        assert!(!matches_path_prefix("/ollama", "/ollama-other"));
+        assert!(matches_path_prefix("/api", "/api/v1/status"));
+        assert!(matches_path_prefix("/api", "/api"));
+        assert!(!matches_path_prefix("/api", "/api-other"));
     }
 
     #[test]
@@ -171,7 +171,7 @@ mod tests {
             },
             BackendRule {
                 pattern: "models.example.com".into(),
-                path_prefix: Some("/ollama".into()),
+                path_prefix: Some("/api".into()),
                 strip_path_prefix: true,
                 proxy_headers: true,
                 backend_addr: ":11434".into(),
@@ -181,7 +181,7 @@ mod tests {
             },
         ];
         let selected =
-            select_backend_for_path(&rules, Some("models.example.com"), "/ollama/api/tags")
+            select_backend_for_path(&rules, Some("models.example.com"), "/api/v1/status")
                 .expect("path backend");
         assert_eq!(selected.backend_addr, ":11434");
     }

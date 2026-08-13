@@ -1407,20 +1407,20 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_ollama_example_has_normalized_authorization() {
-        let configs = parse_client_configs(include_str!("../../client.ollama.example.toml"))
-            .expect("checked-in Ollama example");
+    fn checked_in_authorization_example_has_normalized_authorization() {
+        let configs = parse_client_configs(include_str!("../../client.authorization.example.toml"))
+            .expect("checked-in authorization example");
         let config = &configs[0];
-        let ollama = &config.backend_rules[1];
-        let authorization = ollama.authorization.as_ref().expect("authorization");
-        assert_eq!(ollama.resolved_backend_addr(), "127.0.0.1:11434");
-        assert_eq!(ollama.backend_host.as_deref(), Some("127.0.0.1:11434"));
-        assert_eq!(ollama.path_prefix.as_deref(), Some("/ollama"));
-        assert!(ollama.strip_path_prefix);
-        assert!(ollama.proxy_headers);
-        assert_eq!(authorization.audiences, ["ollama"]);
+        let service = &config.backend_rules[1];
+        let authorization = service.authorization.as_ref().expect("authorization");
+        assert_eq!(service.resolved_backend_addr(), "127.0.0.1:8081");
+        assert_eq!(service.backend_host.as_deref(), Some("127.0.0.1:8081"));
+        assert_eq!(service.path_prefix.as_deref(), Some("/api"));
+        assert!(service.strip_path_prefix);
+        assert!(service.proxy_headers);
+        assert_eq!(authorization.audiences, ["services-api"]);
         assert_eq!(authorization.roles_claim, "groups");
-        assert_eq!(authorization.required_roles, ["ollama-users"]);
+        assert_eq!(authorization.required_roles, ["services-users"]);
         assert!(!authorization.forward_authorization);
         assert!(config.acme.is_some());
         assert!(config.oauth.is_some());

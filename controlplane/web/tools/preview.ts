@@ -4,7 +4,7 @@ const port = Number(process.env.LFP_PREVIEW_PORT ?? "4173");
 const root = join(import.meta.dir, "..", "dist");
 const demoUsername = "lfp-pipe-regbodesktop-b9e13326";
 const demoPrincipal = { id: 101, username: demoUsername, name: "REGBODESKTOP · live demo", client_id: "demo-regbodesktop", entitlement: "regbodesktop.pipe.lfpconnect.io" };
-let demoLastSeen = 0;
+let demoLastSeen = Date.now();
 let demoDevice = { name: "REGBODESKTOP", version: "", platform: "" };
 const encoder = new TextEncoder();
 const configs = new Map<number, string>([
@@ -30,10 +30,10 @@ client_id = "demo-regbodesktop"
 hostname = "demo.regbodesktop.pipe.lfpconnect.io"
 
 [[routes.path_routes]]
-path_prefix = "/ollama"
+path_prefix = "/api"
 strip_path_prefix = true
-backend_addr = "127.0.0.1:11434"
-backend_host = "127.0.0.1:11434"
+backend_addr = "127.0.0.1:8081"
+backend_host = "127.0.0.1:8081"
 
 [routes.path_routes.authorization]
 issuer = "https://auth.lfpconnect.io/application/o/lfp-pipe/"
@@ -41,7 +41,7 @@ audiences = ["lfp-pipe"]
 jwks_uri = "https://auth.lfpconnect.io/application/o/lfp-pipe/jwks/"
 jwks_cache_file = "~/.cache/lfp-pipe/auth/jwks.json"
 roles_claim = "roles"
-required_roles = ["ollama-agent"]
+required_roles = ["service-user"]
 role_match = "any"
 algorithms = ["RS256"]
 jwks_refresh_seconds = 3600

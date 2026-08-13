@@ -179,11 +179,11 @@ or returns an invalid update.
 
 ### Protect an HTTP backend with OAuth JWTs
 
-Use [`client.ollama.example.toml`](client.ollama.example.toml) to expose a local
-Ollama listener while requiring a bearer access token. The client acts as an
+Use [`client.authorization.example.toml`](client.authorization.example.toml) to expose a local
+HTTP service while requiring a bearer access token. The client acts as an
 OAuth resource server: it does not run an interactive login redirect. It
 validates the token signature, exact `iss`, at least one configured `aud`,
-`exp`, optional `nbf`, and the configured roles before connecting to Ollama.
+`exp`, optional `nbf`, and the configured roles before connecting to the backend.
 Invalid or missing credentials receive `401`; a valid token without the
 required role receives `403`.
 
@@ -197,14 +197,14 @@ Protected and path-routed hostnames require ACME. This prevents an encrypted
 TLS path from bypassing HTTP routing or JWT inspection. Add one or more
 `[[routes.path_routes]]` entries to send a segment-boundary prefix to another
 backend under the same certificate. `strip_path_prefix = true` turns a public
-request such as `/ollama/api/tags` into `/api/tags` for Ollama. The most-specific
+request such as `/api/v1/status` into `/v1/status` for the backend. The most-specific
 matching prefix wins and the hostname's ordinary `backend_addr` is the fallback.
 By default, the complete request URI and public `Host` header are preserved,
 trusted `X-Forwarded-*` headers are set from the tunnel connection, and missing
 `Accept-Encoding` is set to `gzip`. Set `backend_host` only when the private
 service requires a different `Host` value, or `proxy_headers = false` to disable
-the forwarding-header behavior for a specific route. For example, Ollama can
-use `backend_host = "127.0.0.1:11434"` together with explicit prefix stripping.
+the forwarding-header behavior for a specific route. A private service can use
+`backend_host = "127.0.0.1:8081"` together with explicit prefix stripping.
 
 Only HTTP/1.1 is advertised on the locally terminated TLS connection. A path
 route can have its own `[routes.path_routes.authorization]` policy, leaving the
@@ -237,7 +237,7 @@ deliberately static, manually managed key set with no staleness limit.
 
 Authentik must put the expected audience and role/group claim into the access
 token. For example, configure a `groups` scope/property mapping and require
-`ollama-users`. Role claim paths may be nested, such as
+`services-users`. Role claim paths may be nested, such as
 `roles_claim = "realm_access.roles"`, and `role_match` may be `any` or `all`.
 Issuer wildcards are intentionally unsupported because verification keys must
 remain bound to one exact issuer. The implementation follows the JWT best
@@ -247,8 +247,8 @@ practice requirements to verify algorithms, issuer, and audience described by
 Example request after obtaining an Authentik access token:
 
 ```sh
-curl https://services.pipe.example.com/ollama/api/tags \
-  -H "Authorization: Bearer $OLLAMA_ACCESS_TOKEN"
+curl https://services.pipe.example.com/api/v1/status \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
 ### Automatic certificates
