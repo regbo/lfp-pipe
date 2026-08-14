@@ -6,6 +6,7 @@ import { Badge, Button, Checkbox, Group, Loader, MantineProvider, Menu, Modal, S
 import { useMediaQuery } from "@mantine/hooks";
 import { ConfigEditor } from "./config-editor";
 import { appTheme, applyBrand, defaultBrand, type BrandSettings } from "./theme";
+import "@fontsource-variable/inter";
 import "@mantine/core/styles.css";
 import "./styles.css";
 
@@ -27,7 +28,12 @@ type ManagedClient = { username: string; name: string; version: string; platform
 type Enrollment = { code: string; device_id: string; name: string; platform: string; version: string; expires_at: string };
 
 function Brand({ settings }: { settings: BrandSettings }) {
-  return <img className="brand" src={settings.logo_url} alt={settings.name} width="620" height="140" />;
+  return (
+    <div className="brand" role="img" aria-label={settings.name}>
+      <img className="brand-mark" src={settings.logo_url} alt="" width="190" height="140" />
+      <span className="brand-word" aria-hidden="true">{settings.wordmark}</span>
+    </div>
+  );
 }
 function normalizeEntitlement(value: string) { return value.startsWith("route:") ? value.slice(6) : value; }
 
@@ -111,7 +117,11 @@ function App() {
   useEffect(() => {
     fetch("/api/branding", { credentials: "same-origin" })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("branding unavailable")))
-      .then((settings: BrandSettings) => { applyBrand(settings); setBrand(settings); })
+      .then((settings: BrandSettings) => {
+        const resolved = { ...defaultBrand, ...settings };
+        applyBrand(resolved);
+        setBrand(resolved);
+      })
       .catch(() => applyBrand(defaultBrand));
     api<Identity>("/api/me")
       .then((value) => {

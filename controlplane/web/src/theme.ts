@@ -12,6 +12,7 @@ import {
 export type BrandSettings = {
   name: string;
   logo_url: string;
+  wordmark: string;
   favicon_url: string;
   color: string;
   color_strong: string;
@@ -19,8 +20,9 @@ export type BrandSettings = {
 };
 
 export const defaultBrand: BrandSettings = {
-  name: "LFP Connect",
-  logo_url: "/assets/lfp-connect-auto.svg",
+  name: "LFP Pipe",
+  logo_url: "/assets/lfp-coral.svg",
+  wordmark: "pipe",
   favicon_url: "/assets/lfp-favicon.svg",
   color: "#ff6f61",
   color_strong: "#e85c50",
@@ -55,7 +57,7 @@ const brandVariants: VariantColorsResolver = (input) => {
 export const appTheme = createTheme({
   primaryColor: "coral",
   defaultRadius: "md",
-  fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+  fontFamily: '"Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif',
   colors: {
     coral: ["#fff1ef", "#ffe2de", "#ffc4bd", "#ffa59b", "#ff877b", "#ff6f61", "#e85c50", "#c9473d", "#a93730", "#872b26"],
   },
@@ -77,7 +79,7 @@ export function applyBrand(brand: BrandSettings) {
   root.setProperty("--color-brand", brand.color);
   root.setProperty("--color-brand-strong", brand.color_strong);
   root.setProperty("--color-brand-ink", brand.ink);
-  document.title = `${brand.name} Pipe`;
+  document.title = brand.name;
   const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   if (favicon) favicon.href = brand.favicon_url;
 }

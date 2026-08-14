@@ -60,7 +60,7 @@ Bun.serve({
   port,
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/api/branding") return json({ name: "LFP Connect", logo_url: "/assets/lfp-connect-auto.svg", favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61", color_strong: "#e85c50", ink: "#0b1426" });
+    if (url.pathname === "/api/branding") return json({ name: "LFP Pipe", logo_url: "/assets/lfp-coral.svg", wordmark: "pipe", favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61", color_strong: "#e85c50", ink: "#0b1426" });
     if (url.pathname === "/api/me") return json({ subject: "preview-user", name: "Local Preview", email: "preview@lfpconnect.io", entitlements: ["regbodesktop.pipe.lfpconnect.io", "speedtest.pipe.lfpconnect.io"], required_entitlement: "pipe.lfpconnect.io", route_pattern: "*.pipe.lfpconnect.io", control_plane_url: "https://manage-pipe.lfpconnect.io" });
     if (url.pathname === "/api/service-principals" && request.method === "GET") return json({ service_principals: principals });
     if (url.pathname === "/api/managed-clients") return json(managedClients());

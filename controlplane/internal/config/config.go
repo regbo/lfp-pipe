@@ -43,6 +43,7 @@ type Config struct {
 type BrandConfig struct {
 	Name        string `json:"name"`
 	LogoURL     string `json:"logo_url"`
+	Wordmark    string `json:"wordmark"`
 	FaviconURL  string `json:"favicon_url"`
 	Color       string `json:"color"`
 	ColorStrong string `json:"color_strong"`
@@ -72,8 +73,9 @@ func LoadArgs(args []string) (Config, error) {
 		NATSTunnelAccount:        envOr("LFP_AUTH_NATS_TUNNEL_ACCOUNT", "TUNNELS"),
 		NATSRequestSubjectPrefix: envOr("LFP_AUTH_NATS_SUBJECT_PREFIX", "lfp.v1.connect"),
 		Brand: BrandConfig{
-			Name:        envOr("LFP_AUTH_BRAND_NAME", "LFP Connect"),
-			LogoURL:     envOr("LFP_AUTH_BRAND_LOGO_URL", "/assets/lfp-connect-auto.svg"),
+			Name:        envOr("LFP_AUTH_BRAND_NAME", "LFP Pipe"),
+			LogoURL:     envOr("LFP_AUTH_BRAND_LOGO_URL", "/assets/lfp-coral.svg"),
+			Wordmark:    envOr("LFP_AUTH_BRAND_WORDMARK", "pipe"),
 			FaviconURL:  envOr("LFP_AUTH_BRAND_FAVICON_URL", "/assets/lfp-favicon.svg"),
 			Color:       envOr("LFP_AUTH_BRAND_COLOR", "#ff6f61"),
 			ColorStrong: envOr("LFP_AUTH_BRAND_COLOR_STRONG", "#e85c50"),
@@ -82,7 +84,8 @@ func LoadArgs(args []string) (Config, error) {
 	}
 	flags := flag.NewFlagSet("lfp-connect-auth", flag.ContinueOnError)
 	flags.StringVar(&cfg.Brand.Name, "brand-name", cfg.Brand.Name, "management website brand name")
-	flags.StringVar(&cfg.Brand.LogoURL, "brand-logo-url", cfg.Brand.LogoURL, "management website logo URL")
+	flags.StringVar(&cfg.Brand.LogoURL, "brand-logo-url", cfg.Brand.LogoURL, "management website monogram URL")
+	flags.StringVar(&cfg.Brand.Wordmark, "brand-wordmark", cfg.Brand.Wordmark, "management website lowercase wordmark")
 	flags.StringVar(&cfg.Brand.FaviconURL, "brand-favicon-url", cfg.Brand.FaviconURL, "management website favicon URL")
 	flags.StringVar(&cfg.Brand.Color, "brand-color", cfg.Brand.Color, "management website primary color")
 	flags.StringVar(&cfg.Brand.ColorStrong, "brand-color-strong", cfg.Brand.ColorStrong, "management website hover color")
@@ -135,8 +138,8 @@ func LoadArgs(args []string) (Config, error) {
 	if cfg.OIDCClientSecret == "" || cfg.AuthentikAPIToken == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalServerToken == "" {
 		return Config{}, errors.New("OIDC, Authentik API, NATS callout, issuer, and internal server secrets must not be empty")
 	}
-	if cfg.Brand.Name == "" || cfg.Brand.LogoURL == "" || cfg.Brand.FaviconURL == "" {
-		return Config{}, errors.New("brand name, logo URL, and favicon URL must not be empty")
+	if cfg.Brand.Name == "" || cfg.Brand.LogoURL == "" || cfg.Brand.Wordmark == "" || cfg.Brand.FaviconURL == "" {
+		return Config{}, errors.New("brand name, logo URL, wordmark, and favicon URL must not be empty")
 	}
 	return cfg, nil
 }

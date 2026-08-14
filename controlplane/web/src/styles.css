@@ -32,7 +32,17 @@ button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   border-bottom: 1px solid var(--color-line);
 }
 
-.brand { display: block; width: 175px; height: auto; }
+.brand { display: inline-flex; align-items: center; gap: 0.48rem; height: 2.5rem; flex: 0 0 auto; }
+.brand-mark { display: block; width: auto; height: 100%; }
+.brand-word {
+  color: var(--color-text);
+  font-family: var(--font-wordmark);
+  font-size: 2.18rem;
+  font-weight: var(--wordmark-weight);
+  letter-spacing: var(--wordmark-tracking);
+  line-height: 1;
+  transform: translateY(-0.035em);
+}
 .main { width: min(calc(100% - 2 * var(--page-gutter)), var(--content-width)); margin: 0 auto; padding: var(--content-gap) 0 2rem; }
 .dashboard { display: grid; gap: var(--content-gap); }
 .dashboard-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
@@ -237,7 +247,8 @@ h1 { margin: 0.55rem 0 0; font-family: var(--font-display); font-size: clamp(2.8
 
 @media (max-width: 520px) {
   .topbar, .main { width: min(calc(100% - 2 * var(--page-gutter)), var(--content-width)); }
-  .brand { width: 155px; }
+  .brand { height: 2.2rem; gap: 0.42rem; }
+  .brand-word { font-size: 1.92rem; }
   .mantine-Button-root { min-height: 2.75rem; }
   .topbar .button span { display: none; }
   .input-suffix input { padding-right: 0.9rem; }

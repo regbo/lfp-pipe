@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">LFP Pipe Bridge tray icon concept</title>
+  <desc id="desc">A pipe rises, bends over like a bridge, and exits through a coupling.</desc>
+  <style>.icon { fill: #ff6f61; }</style>
+  <path class="icon" d="M34 106V62c0-22 14-36 36-36h36v22H70c-9 0-14 5-14 14v44H34Z"/>
+  <rect class="icon" x="24" y="96" width="42" height="12"/>
+  <rect class="icon" x="96" y="16" width="12" height="42"/>
+</svg>

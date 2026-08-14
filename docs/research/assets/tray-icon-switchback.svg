@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">LFP Switchback tray icon concept</title>
+  <desc id="desc">A compact S-shaped pipe carries flow between two offset ports.</desc>
+  <style>.icon { fill: #ff6f61; }</style>
+  <path class="icon" d="M18 20h56c24 0 36 12 36 34S98 88 74 88H55c-8 0-12 4-12 12v10H21V98c0-21 12-32 34-32h19c9 0 14-4 14-12S83 42 74 42H18V20Z"/>
+  <rect class="icon" x="12" y="15" width="12" height="32"/>
+  <rect class="icon" x="16" y="100" width="32" height="12"/>
+</svg>

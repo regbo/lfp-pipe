@@ -523,9 +523,9 @@ fn make_icon() -> anyhow::Result<Icon> {
     );
     paint.anti_alias = true;
 
-    // The L-shaped route follows the LFP monogram's posture while the collars
-    // make the tunnel/pipe purpose readable at 16px and 32px tray sizes.
-    let path = route_elbow_path();
+    // The offset route carries traffic between two endpoints while the collars
+    // keep the tunnel/pipe purpose readable at 16px and 32px tray sizes.
+    let path = switchback_path();
     pixmap.fill_path(
         &path,
         &paint,
@@ -548,49 +548,46 @@ fn make_icon() -> anyhow::Result<Icon> {
     Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| anyhow!(error))
 }
 
-fn route_elbow_path() -> tiny_skia::Path {
+fn switchback_path() -> tiny_skia::Path {
     let mut path = PathBuilder::new();
-    path.move_to(18.0, 8.0);
-    path.line_to(50.0, 8.0);
-    path.line_to(50.0, 20.0);
-    path.line_to(45.0, 20.0);
-    path.line_to(45.0, 75.0);
-    path.cubic_to(45.0, 81.0, 48.0, 84.0, 54.0, 84.0);
-    path.line_to(108.0, 84.0);
-    path.line_to(108.0, 79.0);
-    path.line_to(120.0, 79.0);
-    path.line_to(120.0, 111.0);
-    path.line_to(108.0, 111.0);
-    path.line_to(108.0, 106.0);
-    path.line_to(52.0, 106.0);
-    path.cubic_to(33.0, 106.0, 23.0, 96.0, 23.0, 77.0);
-    path.line_to(23.0, 20.0);
-    path.line_to(18.0, 20.0);
+    path.move_to(18.0, 20.0);
+    path.line_to(74.0, 20.0);
+    path.cubic_to(98.0, 20.0, 110.0, 32.0, 110.0, 54.0);
+    path.cubic_to(110.0, 76.0, 98.0, 88.0, 74.0, 88.0);
+    path.line_to(55.0, 88.0);
+    path.cubic_to(47.0, 88.0, 43.0, 92.0, 43.0, 100.0);
+    path.line_to(43.0, 110.0);
+    path.line_to(21.0, 110.0);
+    path.line_to(21.0, 98.0);
+    path.cubic_to(21.0, 77.0, 33.0, 66.0, 55.0, 66.0);
+    path.line_to(74.0, 66.0);
+    path.cubic_to(83.0, 66.0, 88.0, 62.0, 88.0, 54.0);
+    path.cubic_to(88.0, 50.0, 83.0, 42.0, 74.0, 42.0);
+    path.line_to(18.0, 42.0);
     path.close();
 
-    // Coupling collars at each end of the route.
-    path.move_to(13.0, 20.0);
-    path.line_to(55.0, 20.0);
-    path.line_to(55.0, 31.0);
-    path.line_to(13.0, 31.0);
+    path.move_to(12.0, 15.0);
+    path.line_to(24.0, 15.0);
+    path.line_to(24.0, 47.0);
+    path.line_to(12.0, 47.0);
     path.close();
-    path.move_to(97.0, 74.0);
-    path.line_to(108.0, 74.0);
-    path.line_to(108.0, 116.0);
-    path.line_to(97.0, 116.0);
+    path.move_to(16.0, 100.0);
+    path.line_to(48.0, 100.0);
+    path.line_to(48.0, 112.0);
+    path.line_to(16.0, 112.0);
     path.close();
-    path.finish().expect("valid route elbow path")
+    path.finish().expect("valid switchback path")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_status, route_elbow_path};
+    use super::{compact_status, switchback_path};
 
     #[test]
     fn tray_icon_geometry_fits_source_view_box() {
-        let bounds = route_elbow_path().bounds();
-        assert_eq!((bounds.left(), bounds.top()), (13.0, 8.0));
-        assert_eq!((bounds.right(), bounds.bottom()), (120.0, 116.0));
+        let bounds = switchback_path().bounds();
+        assert_eq!((bounds.left(), bounds.top()), (12.0, 15.0));
+        assert_eq!((bounds.right(), bounds.bottom()), (110.0, 112.0));
     }
 
     #[test]
