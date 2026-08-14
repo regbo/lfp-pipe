@@ -8,11 +8,13 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
+    task::{Context as TaskContext, Poll},
 };
 
 use anyhow::{Context, anyhow};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use rustls_acme::{AcmeConfig, caches::DirCache};
 use shared::{
     config::{ClientAcmeConfig, RelayMode},
@@ -23,7 +25,6 @@ use tokio::{
     net::TcpStream,
     sync::mpsc,
 };
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, warn};
 
 use crate::{BackendRuntime, authorization, request_limits, select_runtime_for_path};
@@ -31,7 +32,41 @@ use crate::{BackendRuntime, authorization, request_limits, select_runtime_for_pa
 /// Cloneable ingress handle owned by request-processing tasks.
 #[derive(Clone)]
 pub(crate) struct AcmeRuntime {
+    inner: Arc<AcmeRuntimeInner>,
+}
+
+struct AcmeRuntimeInner {
     sender: mpsc::Sender<(TcpStream, Option<String>)>,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for AcmeRuntimeInner {
+    fn drop(&mut self) {
+        // Abort before sender is dropped. rustls-acme 0.15.4 busy-loops when
+        // its input stream terminates, so route replacement must cancel the
+        // task without ever exposing the closed channel to that dependency.
+        self.task.abort();
+    }
+}
+
+/// Keep a closed ingress pending until the owning runtime aborts its task.
+///
+/// rustls-acme 0.15.4 attempts to discard a temporary reference when its TCP
+/// input ends instead of clearing the input itself. Returning `None` here would
+/// therefore make its `Incoming::poll_next` loop continuously without yielding.
+struct NonTerminatingReceiverStream<T> {
+    receiver: mpsc::Receiver<T>,
+}
+
+impl<T> Stream for NonTerminatingReceiverStream<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Option<T>> {
+        match self.receiver.poll_recv(context) {
+            Poll::Ready(None) => Poll::Pending,
+            result => result,
+        }
+    }
 }
 
 struct IngressStream {
@@ -88,12 +123,17 @@ impl AcmeRuntime {
         let cache_dir = domain_cache_dir(&cache_root, &config.domain);
         prepare_cache_dir(&cache_dir)?;
         let (sender, receiver) = mpsc::channel(64);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Err(error) = run_acme(config, cache_dir, backends, receiver).await {
                 warn!(?error, "ACME TLS runtime stopped");
             }
         });
-        Ok(Self { sender })
+        Ok(Self {
+            inner: Arc::new(AcmeRuntimeInner {
+                sender,
+                task: task.abort_handle(),
+            }),
+        })
     }
 
     /// Submit one tunneled TLS connection to the ACME-aware acceptor.
@@ -102,7 +142,8 @@ impl AcmeRuntime {
         stream: TcpStream,
         client_ip: Option<String>,
     ) -> anyhow::Result<()> {
-        self.sender
+        self.inner
+            .sender
             .send((stream, client_ip))
             .await
             .map_err(|_| anyhow!("ACME TLS runtime is not available"))
@@ -121,7 +162,7 @@ async fn run_acme(
     } else {
         acme.directory_lets_encrypt(config.production)
     };
-    let tcp_incoming = ReceiverStream::new(receiver)
+    let tcp_incoming = NonTerminatingReceiverStream { receiver }
         .map(|(stream, client_ip)| Ok::<_, io::Error>(IngressStream { stream, client_ip }));
     // Advertising only HTTP/1.1 avoids handing HTTP/2 frames to ordinary
     // plaintext backends that do not implement h2c.
@@ -243,10 +284,14 @@ fn domain_cache_dir(root: &Path, domain: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AcmeRuntime, domain_cache_dir};
+    use super::{AcmeRuntime, AcmeRuntimeInner, NonTerminatingReceiverStream, domain_cache_dir};
+    use futures::StreamExt;
     use shared::config::{BackendRule, ClientAcmeConfig, RelayMode};
+    use std::future;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::{net::TcpStream, sync::mpsc, time::timeout};
 
     #[test]
     fn domain_cache_directory_cannot_escape_root() {
@@ -282,5 +327,41 @@ mod tests {
         .err()
         .expect("splice must fail");
         assert!(error.to_string().contains("cannot use splice"));
+    }
+
+    #[tokio::test]
+    async fn closed_ingress_stays_pending_for_dependency_shutdown() {
+        let (sender, receiver) = mpsc::channel::<()>(1);
+        drop(sender);
+        let mut stream = NonTerminatingReceiverStream { receiver };
+
+        assert!(
+            timeout(Duration::from_millis(20), stream.next())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_last_runtime_handle_aborts_acme_task() {
+        let (sender, _receiver) = mpsc::channel::<(TcpStream, Option<String>)>(1);
+        let task = tokio::spawn(future::pending::<()>());
+        let runtime = AcmeRuntime {
+            inner: Arc::new(AcmeRuntimeInner {
+                sender,
+                task: task.abort_handle(),
+            }),
+        };
+        let clone = runtime.clone();
+
+        drop(runtime);
+        assert!(!task.is_finished());
+        drop(clone);
+
+        assert!(
+            task.await
+                .expect_err("task should be aborted")
+                .is_cancelled()
+        );
     }
 }
