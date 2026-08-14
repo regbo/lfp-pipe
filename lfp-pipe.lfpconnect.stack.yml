@@ -1,0 +1,241 @@
+version: "3.8"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: ${LOG_MAX_FILES:-5}
+
+services:
+  nats:
+    image: ${NATS_IMAGE?Variable not set}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export NATS_CALLOUT_PASSWORD="$$(cat /run/secrets/nats_callout_password)"
+        export NATS_SYSTEM_PASSWORD="$$(cat /run/secrets/nats_system_password)"
+        exec nats-server --config /etc/nats/nats.conf
+    environment:
+      NATS_AUTH_ISSUER_PUBLIC_KEY: ${NATS_AUTH_ISSUER_PUBLIC_KEY?Variable not set}
+      NATS_AUTH_XKEY_PUBLIC_KEY: ${NATS_AUTH_XKEY_PUBLIC_KEY?Variable not set}
+    configs:
+      - source: nats_config
+        target: /etc/nats/nats.conf
+    secrets:
+      - nats_callout_password
+      - nats_system_password
+    networks:
+      - control
+      - traefik-public
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging: *default-logging
+    deploy:
+      replicas: 3
+      placement:
+        constraints:
+          - node.role == manager
+        max_replicas_per_node: 1
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 5s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=${TRAEFIK_NETWORK:-traefik-public}
+        - traefik.tcp.routers.lfp-pipe-nats.rule=HostSNI(`nats-${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}`)
+        - traefik.tcp.routers.lfp-pipe-nats.entrypoints=${TRAEFIK_TLS_ENTRYPOINT:-tcps}
+        - traefik.tcp.routers.lfp-pipe-nats.tls=true
+        - traefik.tcp.routers.lfp-pipe-nats.service=lfp-pipe-nats
+        - traefik.tcp.services.lfp-pipe-nats.loadbalancer.server.port=4222
+
+  auth:
+    image: ${AUTH_IMAGE?Variable not set}
+    environment:
+      LFP_AUTH_HTTP_ADDR: :8080
+      LFP_AUTH_PUBLIC_URL: https://${MANAGE_HOST?Variable not set}
+      LFP_AUTH_ROUTE_SUFFIX: ${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}
+      LFP_AUTH_OIDC_ISSUER_URL: https://auth.${DOMAIN?Variable not set}/application/o/${AUTHENTIK_APPLICATION_SLUG?Variable not set}/
+      LFP_AUTH_OIDC_CLIENT_ID: ${AUTHENTIK_CLIENT_ID?Variable not set}
+      LFP_AUTH_OIDC_SCOPES: openid,profile,email,entitlements
+      LFP_AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/authentik_client_secret
+      LFP_AUTH_AUTHENTIK_API_URL: https://auth.${DOMAIN?Variable not set}/api/v3
+      LFP_AUTH_AUTHENTIK_API_TOKEN_FILE: /run/secrets/authentik_api_token
+      LFP_AUTH_AUTHENTIK_APPLICATION_SLUG: ${AUTHENTIK_APPLICATION_SLUG?Variable not set}
+      LFP_AUTH_OAUTH_TOKEN_URL: https://auth.${DOMAIN?Variable not set}/application/o/token/
+      LFP_AUTH_COOKIE_SECRET_FILE: /run/secrets/cookie_secret
+      LFP_AUTH_TICKET_SECRET_FILE: /run/secrets/ticket_secret
+      LFP_AUTH_NATS_URLS: nats://nats:4222
+      LFP_AUTH_NATS_PUBLIC_URLS: tls://nats-${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}:443
+      LFP_AUTH_NATS_CALLOUT_USER: auth-svc
+      LFP_AUTH_NATS_CALLOUT_PASSWORD_FILE: /run/secrets/nats_callout_password
+      LFP_AUTH_NATS_ISSUER_SEED_FILE: /run/secrets/nats_auth_issuer_seed
+      LFP_AUTH_NATS_XKEY_SEED_FILE: /run/secrets/nats_auth_xkey_seed
+      LFP_AUTH_NATS_INTERNAL_SERVER_TOKEN_FILE: /run/secrets/nats_internal_server_token
+      LFP_AUTH_NATS_TUNNEL_ACCOUNT: TUNNELS
+      LFP_AUTH_NATS_SUBJECT_PREFIX: lfp.v1.connect
+      LFP_AUTH_TICKET_TTL_MINUTES: ${TICKET_TTL_MINUTES:-30}
+    secrets:
+      - authentik_client_secret
+      - authentik_api_token
+      - cookie_secret
+      - ticket_secret
+      - nats_callout_password
+      - nats_auth_issuer_seed
+      - nats_auth_xkey_seed
+      - nats_internal_server_token
+    networks:
+      - control
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *default-logging
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+  web:
+    image: ${WEB_IMAGE?Variable not set}
+    networks:
+      - control
+      - traefik-public
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging: *default-logging
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=${TRAEFIK_NETWORK:-traefik-public}
+        - traefik.http.routers.lfp-pipe-manage.rule=Host(`${MANAGE_HOST?Variable not set}`)
+        - traefik.http.routers.lfp-pipe-manage.entrypoints=${TRAEFIK_TLS_ENTRYPOINT:-tcps}
+        - traefik.http.routers.lfp-pipe-manage.tls=true
+        - traefik.http.routers.lfp-pipe-manage.service=lfp-pipe-manage
+        - traefik.http.services.lfp-pipe-manage.loadbalancer.server.port=8080
+
+  server:
+    image: ${SERVER_IMAGE?Variable not set}
+    command: ["--config", "/etc/lfp-pipe/server.toml"]
+    environment:
+      LFP_PIPE_ADVERTISED_DATA_ADDR: ${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}:7001
+    configs:
+      - source: server_config
+        target: /etc/lfp-pipe/server.toml
+    secrets:
+      - nats_internal_server_token
+    networks:
+      - control
+      - traefik-public
+    ports:
+      - target: 7001
+        published: 7001
+        protocol: tcp
+        mode: ingress
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=${TRAEFIK_NETWORK:-traefik-public}
+        # Plain HTTP is the intentional exception to the cluster-wide port-80 redirect.
+        - traefik.http.routers.lfp-pipe-tunnel-http.rule=HostRegexp(`{route:[a-z0-9-]+}.${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}`)
+        - traefik.http.routers.lfp-pipe-tunnel-http.entrypoints=${TRAEFIK_HTTP_ENTRYPOINT:-http}
+        - traefik.http.routers.lfp-pipe-tunnel-http.priority=100
+        - traefik.http.routers.lfp-pipe-tunnel-http.service=lfp-pipe-tunnel-http
+        - traefik.http.services.lfp-pipe-tunnel-http.loadbalancer.server.port=7443
+        # TLS remains encrypted through Traefik; the public client and backend own it.
+        - traefik.tcp.routers.lfp-pipe-tunnel-tls.rule=HostSNIRegexp(`{route:[a-z0-9-]+}.${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}`)
+        - traefik.tcp.routers.lfp-pipe-tunnel-tls.entrypoints=${TRAEFIK_TLS_ENTRYPOINT:-tcps}
+        - traefik.tcp.routers.lfp-pipe-tunnel-tls.tls.passthrough=true
+        - traefik.tcp.routers.lfp-pipe-tunnel-tls.service=lfp-pipe-tunnel-tls
+        - traefik.tcp.services.lfp-pipe-tunnel-tls.loadbalancer.server.port=7443
+
+configs:
+  nats_config:
+    external: true
+    name: ${NATS_CONFIG_NAME?Variable not set}
+  server_config:
+    external: true
+    name: ${SERVER_CONFIG_NAME?Variable not set}
+
+secrets:
+  authentik_client_secret:
+    external: true
+    name: ${AUTHENTIK_CLIENT_SECRET_NAME?Variable not set}
+  authentik_api_token:
+    external: true
+    name: ${AUTHENTIK_API_TOKEN_NAME?Variable not set}
+  cookie_secret:
+    external: true
+    name: ${COOKIE_SECRET_NAME?Variable not set}
+  ticket_secret:
+    external: true
+    name: ${TICKET_SECRET_NAME?Variable not set}
+  nats_callout_password:
+    external: true
+    name: ${NATS_CALLOUT_PASSWORD_NAME?Variable not set}
+  nats_system_password:
+    external: true
+    name: ${NATS_SYSTEM_PASSWORD_NAME?Variable not set}
+  nats_auth_issuer_seed:
+    external: true
+    name: ${NATS_AUTH_ISSUER_SEED_NAME?Variable not set}
+  nats_auth_xkey_seed:
+    external: true
+    name: ${NATS_AUTH_XKEY_SEED_NAME?Variable not set}
+  nats_internal_server_token:
+    external: true
+    name: ${NATS_INTERNAL_SERVER_TOKEN_NAME?Variable not set}
+
+networks:
+  control:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+  traefik-public:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik-public}
