@@ -9,7 +9,7 @@ use shared::config::CentralClientBootstrap;
 use uuid::Uuid;
 
 /// Default management origin used by first-run desktop clients.
-pub const DEFAULT_CONTROL_PLANE: &str = "https://manage-pipe.lfpconnect.io";
+pub const DEFAULT_CONTROL_PLANE: &str = "https://pipe.lfpconnect.io";
 
 /// Persisted preferences and enrollment identity for the desktop experience.
 #[derive(Debug, Clone, Serialize, Deserialize)]

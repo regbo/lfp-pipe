@@ -61,7 +61,7 @@ Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/branding") return json({ name: "LFP Pipe", logo_url: "/assets/lfp-coral.svg", wordmark: "pipe", favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61", color_strong: "#e85c50", ink: "#0b1426" });
-    if (url.pathname === "/api/me") return json({ subject: "preview-user", name: "Local Preview", email: "preview@lfpconnect.io", entitlements: ["regbodesktop.pipe.lfpconnect.io", "speedtest.pipe.lfpconnect.io"], required_entitlement: "pipe.lfpconnect.io", route_pattern: "*.pipe.lfpconnect.io", control_plane_url: "https://manage-pipe.lfpconnect.io" });
+    if (url.pathname === "/api/me") return json({ subject: "preview-user", name: "Local Preview", email: "preview@lfpconnect.io", entitlements: ["regbodesktop.pipe.lfpconnect.io", "speedtest.pipe.lfpconnect.io"], required_entitlement: "pipe.lfpconnect.io", route_pattern: "*.pipe.lfpconnect.io", control_plane_url: "https://pipe.lfpconnect.io" });
     if (url.pathname === "/api/service-principals" && request.method === "GET") return json({ service_principals: principals });
     if (url.pathname === "/api/managed-clients") return json(managedClients());
     if (url.pathname === "/api/managed-client-events") {
@@ -86,7 +86,7 @@ Bun.serve({
       return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
     if (url.pathname === "/api/tunnel-tokens" && request.method === "POST") {
-      const response = await fetch("https://manage-pipe.lfpconnect.io/api/tunnel-tokens", { method: "POST", headers: { "Authorization": bearer(request), "Content-Type": "application/json" }, body: await request.text() });
+      const response = await fetch("https://pipe.lfpconnect.io/api/tunnel-tokens", { method: "POST", headers: { "Authorization": bearer(request), "Content-Type": "application/json" }, body: await request.text() });
       return new Response(response.body, { status: response.status, headers: { "Content-Type": response.headers.get("content-type") ?? "application/json" } });
     }
     const match = url.pathname.match(/^\/api\/service-principals\/(\d+)\/config$/);

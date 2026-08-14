@@ -98,7 +98,7 @@ CLI flag > environment variable > TOML file > typed default
 
 Desktop installs do not require a configuration file. Starting the client with
 no arguments defaults to remote management at
-`https://manage-pipe.lfpconnect.io`: the tray starts, a short-lived enrollment
+`https://pipe.lfpconnect.io`: the tray starts, a short-lived enrollment
 page opens, and the signed-in owner approves the device and selects its route
 entitlement. The resulting Authentik service-account credential is stored in
 the operating-system user configuration directory. From then on the client
@@ -166,7 +166,7 @@ For a client whose routes and authorization policy are managed entirely in the
 web console, the local TOML can contain only:
 
 ```toml
-control_plane_url = "https://manage-pipe.lfpconnect.io"
+control_plane_url = "https://pipe.lfpconnect.io"
 control_plane_config = true
 ```
 
