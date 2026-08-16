@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, anyhow};
-use async_nats::Client;
+use async_nats::{Client, connection::State as NatsConnectionState};
 use futures::StreamExt;
 use shared::{
     config::{ServerConfig, SniPassthroughRoute},
@@ -30,6 +30,9 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+const NATS_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const NATS_WATCHDOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct AppState {
@@ -73,12 +76,63 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         "server listening"
     );
 
-    let public_task = tokio::spawn(accept_public_loop(public_listener, state.clone()));
-    let data_task = tokio::spawn(accept_data_loop(data_listener, state));
+    let mut public_task = tokio::spawn(accept_public_loop(public_listener, state.clone()));
+    let mut data_task = tokio::spawn(accept_data_loop(data_listener, state.clone()));
+    let mut nats_task = tokio::spawn(watch_nats(state.nats));
 
-    public_task.await??;
-    data_task.await??;
+    tokio::select! {
+        result = &mut public_task => {
+            data_task.abort();
+            nats_task.abort();
+            result??;
+        }
+        result = &mut data_task => {
+            public_task.abort();
+            nats_task.abort();
+            result??;
+        }
+        result = &mut nats_task => {
+            public_task.abort();
+            data_task.abort();
+            result??;
+        }
+    }
     Ok(())
+}
+
+async fn watch_nats(nats: Client) -> anyhow::Result<()> {
+    loop {
+        sleep(NATS_WATCHDOG_INTERVAL).await;
+        ensure_nats_ready(&nats)
+            .await
+            .context("NATS watchdog could not restore the connection")?;
+    }
+}
+
+async fn ensure_nats_ready(nats: &Client) -> anyhow::Result<()> {
+    let state = nats.connection_state();
+    if state == NatsConnectionState::Connected {
+        match flush_nats(nats).await {
+            Ok(()) => return Ok(()),
+            Err(error) => warn!(?error, "NATS flush failed; forcing reconnection"),
+        }
+    } else {
+        warn!(%state, "NATS is not connected; forcing reconnection");
+    }
+
+    nats.force_reconnect()
+        .await
+        .context("failed to request NATS reconnection")?;
+    flush_nats(nats)
+        .await
+        .context("NATS did not recover after forced reconnection")
+}
+
+async fn flush_nats(nats: &Client) -> anyhow::Result<()> {
+    timeout(NATS_READY_TIMEOUT, nats.flush())
+        .await
+        .context("timed out waiting for NATS flush")?
+        .context("failed to flush NATS connection")
 }
 
 async fn accept_public_loop(listener: TcpListener, state: AppState) -> anyhow::Result<()> {
@@ -230,6 +284,10 @@ async fn broadcast_and_wait_for_claim(
     client_ip: String,
     tls: bool,
 ) -> anyhow::Result<ConnectionClaim> {
+    ensure_nats_ready(&state.nats)
+        .await
+        .context("NATS is unavailable for tunnel claim")?;
+
     let reply_subject = state.nats.new_inbox();
     let mut claims = state
         .nats
