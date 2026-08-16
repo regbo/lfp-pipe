@@ -135,6 +135,12 @@ func authorize(req *jwt.AuthorizationRequest, cfg config.Config, tickets *ticket
 	user.Name = claims.ClientID
 	user.Audience = cfg.NATSTunnelAccount
 	user.Expires = claims.ExpiresAt.Unix()
+	// A tunnel claim is a two-phase request/reply exchange: the client replies
+	// to the server inbox and supplies its own inbox for the winner ack. NATS
+	// response permissions alone reject that publish-with-reply shape, so grant
+	// the server inbox namespace explicitly. The server still validates the
+	// connection ID and selected client before accepting a data connection.
+	user.Pub.Allow.Add("_INBOX.>")
 	user.Sub.Allow.Add(subject)
 	user.Sub.Allow.Add("_LFP_INBOX." + claims.ClientID + ".>")
 	user.Resp = &jwt.ResponsePermission{MaxMsgs: 1, Expires: 5 * time.Second}

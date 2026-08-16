@@ -49,6 +49,9 @@ func TestTunnelTicketProducesExactRoutePermissions(t *testing.T) {
 	if len(claims.Sub.Allow) != 2 || claims.Sub.Allow[0] != "lfp.v1.connect.domain.subdomain.cool" {
 		t.Fatalf("unexpected subscribe permissions %#v", claims.Sub.Allow)
 	}
+	if len(claims.Pub.Allow) != 1 || claims.Pub.Allow[0] != "_INBOX.>" {
+		t.Fatalf("unexpected publish permissions %#v", claims.Pub.Allow)
+	}
 	if claims.Resp == nil || claims.Resp.MaxMsgs != 1 {
 		t.Fatalf("expected one-response permission, got %#v", claims.Resp)
 	}
