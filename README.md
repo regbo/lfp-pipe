@@ -233,8 +233,10 @@ Interactive OIDC reserves `/_lfp/auth/callback` and `/_lfp/auth/logout` by
 default. Register `https://<public-host>/_lfp/auth/callback` with the provider.
 The client strips caller-supplied identity headers and, after successful login,
 sets `X-Forwarded-User`, `X-Forwarded-Email`, `X-Forwarded-Groups`, and matching
-`X-Auth-Request-*` headers for the private backend. Keep the backend bound to a
-private or loopback address so these headers are trusted only from lfp-pipe.
+`X-Auth-Request-*` headers for the private backend. It also emits Authentik's
+standard `X-authentik-uid`, username, name, email, and groups headers so apps
+configured for Authentik forward auth work unchanged. Keep the backend bound to
+a private or loopback address so these headers are trusted only from lfp-pipe.
 
 ### Desktop tray
 

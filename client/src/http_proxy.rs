@@ -29,7 +29,7 @@ use crate::{
 
 type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
-const IDENTITY_HEADERS: [&str; 7] = [
+const IDENTITY_HEADERS: [&str; 12] = [
     "x-forwarded-user",
     "x-forwarded-email",
     "x-forwarded-groups",
@@ -37,6 +37,11 @@ const IDENTITY_HEADERS: [&str; 7] = [
     "x-auth-request-email",
     "x-auth-request-groups",
     "x-auth-request-preferred-username",
+    "x-authentik-uid",
+    "x-authentik-username",
+    "x-authentik-name",
+    "x-authentik-email",
+    "x-authentik-groups",
 ];
 
 pub(crate) async fn serve<S>(
@@ -181,14 +186,23 @@ fn prepare_request<B>(
             "x-auth-request-preferred-username",
             &identity.username,
         )?;
+        set_header(request, "x-authentik-uid", &identity.subject)?;
+        set_header(request, "x-authentik-username", &identity.username)?;
+        set_header(
+            request,
+            "x-authentik-name",
+            identity.name.as_deref().unwrap_or(&identity.username),
+        )?;
         if let Some(email) = &identity.email {
             set_header(request, "x-forwarded-email", email)?;
             set_header(request, "x-auth-request-email", email)?;
+            set_header(request, "x-authentik-email", email)?;
         }
         if !identity.groups.is_empty() {
             let groups = identity.groups.join(",");
             set_header(request, "x-forwarded-groups", &groups)?;
             set_header(request, "x-auth-request-groups", &groups)?;
+            set_header(request, "x-authentik-groups", &identity.groups.join("|"))?;
         }
     }
 
@@ -337,7 +351,7 @@ fn full_body(body: Bytes) -> ProxyBody {
 #[cfg(test)]
 mod tests {
     use super::{prepare_request, strip_uri_prefix};
-    use crate::BackendRuntime;
+    use crate::{BackendRuntime, authorization::AuthenticatedIdentity};
     use hyper::{Request, Uri, header};
     use shared::config::BackendRule;
 
@@ -353,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn proxy_request_replaces_spoofed_forwarding_and_identity_headers() {
+    fn proxy_request_replaces_spoofed_headers_with_verified_identity() {
         let backend = BackendRuntime {
             rule: BackendRule {
                 pattern: "service.example".to_string(),
@@ -372,16 +386,39 @@ mod tests {
             .header(header::HOST, "service.example")
             .header("x-forwarded-for", "203.0.113.99")
             .header("x-forwarded-user", "attacker")
+            .header("x-authentik-uid", "attacker")
             .body(())
             .expect("request");
 
-        prepare_request(&mut request, &backend, Some("198.51.100.24"), "https", None)
-            .expect("prepared request");
+        let identity = AuthenticatedIdentity {
+            subject: "stable-subject".to_string(),
+            username: "regbo".to_string(),
+            name: Some("Reggie Pierce".to_string()),
+            email: Some("regbo@example.com".to_string()),
+            groups: vec!["chat-users".to_string(), "operators".to_string()],
+            expires_unix: u64::MAX,
+        };
+        prepare_request(
+            &mut request,
+            &backend,
+            Some("198.51.100.24"),
+            "https",
+            Some(&identity),
+        )
+        .expect("prepared request");
 
         assert_eq!(request.uri().to_string(), "/jobs?stream=false");
         assert_eq!(request.headers()[header::HOST], "127.0.0.1:8080");
         assert_eq!(request.headers()["x-forwarded-for"], "198.51.100.24");
         assert_eq!(request.headers()["x-forwarded-host"], "service.example");
-        assert!(!request.headers().contains_key("x-forwarded-user"));
+        assert_eq!(request.headers()["x-forwarded-user"], "regbo");
+        assert_eq!(request.headers()["x-authentik-uid"], "stable-subject");
+        assert_eq!(request.headers()["x-authentik-username"], "regbo");
+        assert_eq!(request.headers()["x-authentik-name"], "Reggie Pierce");
+        assert_eq!(request.headers()["x-authentik-email"], "regbo@example.com");
+        assert_eq!(
+            request.headers()["x-authentik-groups"],
+            "chat-users|operators"
+        );
     }
 }
