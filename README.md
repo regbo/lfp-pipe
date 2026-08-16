@@ -186,21 +186,28 @@ validates every downloaded document before applying it, polls for updates, and
 keeps the last valid configuration running when the control plane is unavailable
 or returns an invalid update.
 
-### Protect an HTTP backend with OAuth JWTs
+### Protect an HTTP backend with OAuth and OIDC
 
 Use [`client.authorization.example.toml`](client.authorization.example.toml) to expose a local
-HTTP service while requiring a bearer access token. The client acts as an
-OAuth resource server: it does not run an interactive login redirect. It
-validates the token signature, exact `iss`, at least one configured `aud`,
-`exp`, optional `nbf`, and the configured roles before connecting to the backend.
-Invalid or missing credentials receive `401`; a valid token without the
-required role receives `403`.
+HTTP service with bearer access tokens, interactive browser OIDC, or both.
+Bearer and OIDC are independent selectors. Existing authorization blocks remain
+bearer-only; when `oidc_client_id` is configured and the selectors are omitted,
+both methods are enabled. Explicit `bearer = true|false` and `oidc = true|false`
+always take precedence.
+
+Bearer requests validate the token signature, exact `iss`, at least one
+configured `aud`, `exp`, optional `nbf`, and configured roles. Browser requests
+without an Authorization header are redirected through OIDC authorization-code
+flow with PKCE, state, and nonce. The resulting session is stored in an
+authenticated-encrypted `Secure`, `HttpOnly`, `SameSite=Lax` cookie. Invalid
+credentials receive `401`; valid credentials without a required role receive
+`403`.
 
 The configuration keeps three trust boundaries separate:
 
 - `[oauth]` obtains route-scoped NATS credentials for the tunnel client.
 - `[acme]` terminates public HTTPS locally.
-- `[authorization]` authenticates each HTTP connection before backend access.
+- `[authorization]` authenticates every HTTP request before backend access.
 
 Protected and path-routed hostnames require ACME. This prevents an encrypted
 TLS path from bypassing HTTP routing or JWT inspection. Add one or more
@@ -215,11 +222,19 @@ service requires a different `Host` value, or `proxy_headers = false` to disable
 the forwarding-header behavior for a specific route. A private service can use
 `backend_host = "127.0.0.1:8081"` together with explicit prefix stripping.
 
-Only HTTP/1.1 is advertised on the locally terminated TLS connection. A path
-route can have its own `[routes.path_routes.authorization]` policy, leaving the
-rest of the hostname available for a browser-oriented Authentik forward-auth
-proxy. The bearer header is removed before forwarding by default; set
+Only HTTP/1.1 is advertised on the locally terminated TLS connection. Inspected
+traffic uses a request-level proxy so keep-alive requests are routed and
+authorized independently; HTTP upgrades such as WebSockets remain supported.
+A path route can have its own `[routes.path_routes.authorization]` policy. The
+bearer header is removed before forwarding by default; set
 `forward_authorization = true` only when the private backend must receive it.
+
+Interactive OIDC reserves `/_lfp/auth/callback` and `/_lfp/auth/logout` by
+default. Register `https://<public-host>/_lfp/auth/callback` with the provider.
+The client strips caller-supplied identity headers and, after successful login,
+sets `X-Forwarded-User`, `X-Forwarded-Email`, `X-Forwarded-Groups`, and matching
+`X-Auth-Request-*` headers for the private backend. Keep the backend bound to a
+private or loopback address so these headers are trusted only from lfp-pipe.
 
 ### Desktop tray
 

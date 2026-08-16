@@ -33,6 +33,8 @@ backend_host = "127.0.0.1:8081"
 # OAuth access tokens presented by callers are validated as JWTs. Issuer and
 # audience comparisons are exact; they are deliberately not wildcard patterns.
 [routes.path_routes.authorization]
+bearer = true
+oidc = true
 issuer = "https://auth.example.com/application/o/services/"
 audiences = ["services-api"]
 # jwks_uri = "https://auth.example.com/application/o/services/jwks/"
@@ -44,3 +46,14 @@ algorithms = ["RS256"]
 jwks_refresh_seconds = 3600
 jwks_max_stale_seconds = 604800
 forward_authorization = false
+
+# Browser requests without a bearer token use OIDC authorization-code flow
+# with PKCE. Register this exact redirect URI with the provider:
+# https://services.pipe.example.com/_lfp/auth/callback
+oidc_client_id = "services-browser"
+oidc_client_secret_file = "/run/secrets/services_oidc_client_secret"
+oidc_scopes = ["openid", "profile", "email", "groups"]
+oidc_callback_path = "/_lfp/auth/callback"
+oidc_logout_path = "/_lfp/auth/logout"
+oidc_session_key_file = "/run/secrets/lfp_pipe_oidc_session_key"
+oidc_session_ttl_seconds = 28800

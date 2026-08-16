@@ -231,6 +231,16 @@ pub struct ClientConfig {
 /// an authorization boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientAuthorizationConfig {
+    /// Accept OAuth bearer access tokens on protected requests.
+    ///
+    /// Omitted settings remain enabled for backward compatibility.
+    #[serde(default)]
+    pub bearer: Option<bool>,
+    /// Run interactive browser OIDC login and accept the resulting session.
+    ///
+    /// When omitted, this is enabled if an OIDC client ID is configured.
+    #[serde(default)]
+    pub oidc: Option<bool>,
     /// Exact JWT `iss` claim and OIDC issuer used for discovery.
     pub issuer: String,
     /// One or more accepted JWT `aud` values.
@@ -271,6 +281,43 @@ pub struct ClientAuthorizationConfig {
     /// Maximum accepted HTTP request-header size.
     #[serde(default = "default_auth_max_header_bytes")]
     pub max_header_bytes: usize,
+    /// Confidential OIDC relying-party client identifier.
+    #[serde(default)]
+    pub oidc_client_id: Option<String>,
+    /// File containing the OIDC relying-party client secret.
+    #[serde(default)]
+    pub oidc_client_secret_file: Option<String>,
+    /// OIDC scopes requested during browser login.
+    #[serde(default = "default_browser_oidc_scopes")]
+    pub oidc_scopes: Vec<String>,
+    /// Same-origin callback path reserved by the forward-auth gateway.
+    #[serde(default = "default_oidc_callback_path")]
+    pub oidc_callback_path: String,
+    /// Same-origin path that clears the encrypted browser session.
+    #[serde(default = "default_oidc_logout_path")]
+    pub oidc_logout_path: String,
+    /// File containing or receiving the 64-byte encrypted-cookie key.
+    #[serde(default = "default_oidc_session_key_file")]
+    pub oidc_session_key_file: String,
+    /// Absolute browser-session lifetime.
+    #[serde(default = "default_oidc_session_ttl_seconds")]
+    pub oidc_session_ttl_seconds: u64,
+}
+
+impl ClientAuthorizationConfig {
+    /// Whether bearer-token authorization is active for this policy.
+    pub fn bearer_enabled(&self) -> bool {
+        self.bearer.unwrap_or(true)
+    }
+
+    /// Whether interactive OIDC authorization is active for this policy.
+    pub fn oidc_enabled(&self) -> bool {
+        self.oidc.unwrap_or_else(|| {
+            self.oidc_client_id
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    }
 }
 
 /// Required-role matching semantics.
@@ -398,6 +445,12 @@ pub struct ClientAuthorizationDefaults {
     /// Whether this route inherits or enables authorization.
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Accept bearer access tokens.
+    #[serde(default)]
+    pub bearer: Option<bool>,
+    /// Enable interactive browser OIDC login.
+    #[serde(default)]
+    pub oidc: Option<bool>,
     /// Exact JWT issuer.
     #[serde(default)]
     pub issuer: Option<String>,
@@ -440,6 +493,27 @@ pub struct ClientAuthorizationDefaults {
     /// Maximum HTTP request-header size.
     #[serde(default)]
     pub max_header_bytes: Option<usize>,
+    /// Confidential OIDC relying-party client identifier.
+    #[serde(default)]
+    pub oidc_client_id: Option<String>,
+    /// File containing the OIDC relying-party client secret.
+    #[serde(default)]
+    pub oidc_client_secret_file: Option<String>,
+    /// Browser-login scopes.
+    #[serde(default)]
+    pub oidc_scopes: Option<Vec<String>>,
+    /// Same-origin OIDC callback path.
+    #[serde(default)]
+    pub oidc_callback_path: Option<String>,
+    /// Same-origin session logout path.
+    #[serde(default)]
+    pub oidc_logout_path: Option<String>,
+    /// File containing or receiving the encrypted-cookie key.
+    #[serde(default)]
+    pub oidc_session_key_file: Option<String>,
+    /// Absolute browser-session lifetime.
+    #[serde(default)]
+    pub oidc_session_ttl_seconds: Option<u64>,
 }
 
 /// Inheritable Authentik settings for multi-route client files.
@@ -736,6 +810,31 @@ fn default_auth_max_header_bytes() -> usize {
     32 * 1024
 }
 
+fn default_browser_oidc_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "profile".to_string(),
+        "email".to_string(),
+        "groups".to_string(),
+    ]
+}
+
+fn default_oidc_callback_path() -> String {
+    "/_lfp/auth/callback".to_string()
+}
+
+fn default_oidc_logout_path() -> String {
+    "/_lfp/auth/logout".to_string()
+}
+
+fn default_oidc_session_key_file() -> String {
+    "~/.secrets/lfp-pipe/oidc-session-key".to_string()
+}
+
+fn default_oidc_session_ttl_seconds() -> u64 {
+    8 * 60 * 60
+}
+
 /// Load server TOML without applying CLI or environment overrides.
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = fs::read_to_string(path)
@@ -885,28 +984,77 @@ fn validate_client_config(config: &ClientConfig) -> anyhow::Result<()> {
 
 fn validate_authorization(authorization: &ClientAuthorizationConfig) -> anyhow::Result<()> {
     anyhow::ensure!(
+        authorization.bearer_enabled() || authorization.oidc_enabled(),
+        "authorization must enable bearer, oidc, or both"
+    );
+    anyhow::ensure!(
         !authorization.issuer.trim().is_empty(),
         "authorization.issuer cannot be empty"
     );
-    anyhow::ensure!(
-        !authorization.audiences.is_empty(),
-        "authorization.audiences cannot be empty"
-    );
-    anyhow::ensure!(
-        !authorization.jwks_cache_file.trim().is_empty(),
-        "authorization.jwks_cache_file cannot be empty"
-    );
-    anyhow::ensure!(
-        !authorization.algorithms.is_empty(),
-        "authorization.algorithms cannot be empty"
-    );
+    if authorization.bearer_enabled() {
+        anyhow::ensure!(
+            !authorization.audiences.is_empty(),
+            "authorization.audiences cannot be empty when bearer is enabled"
+        );
+        anyhow::ensure!(
+            !authorization.jwks_cache_file.trim().is_empty(),
+            "authorization.jwks_cache_file cannot be empty"
+        );
+        anyhow::ensure!(
+            !authorization.algorithms.is_empty(),
+            "authorization.algorithms cannot be empty"
+        );
+    }
+    if authorization.oidc_enabled() {
+        let oidc_client_id = authorization.oidc_client_id.as_deref().unwrap_or_default();
+        let oidc_client_secret_file = authorization
+            .oidc_client_secret_file
+            .as_deref()
+            .unwrap_or_default();
+        anyhow::ensure!(
+            !oidc_client_id.trim().is_empty(),
+            "authorization.oidc_client_id is required when oidc is enabled"
+        );
+        anyhow::ensure!(
+            !oidc_client_secret_file.trim().is_empty(),
+            "authorization.oidc_client_secret_file is required when oidc is enabled"
+        );
+        anyhow::ensure!(
+            authorization
+                .oidc_scopes
+                .iter()
+                .any(|scope| scope == "openid"),
+            "authorization.oidc_scopes must contain openid"
+        );
+        for (name, path) in [
+            ("oidc_callback_path", &authorization.oidc_callback_path),
+            ("oidc_logout_path", &authorization.oidc_logout_path),
+        ] {
+            anyhow::ensure!(
+                path.starts_with("/_lfp/auth/") && !path.contains(['?', '#']),
+                "authorization.{name} must be a reserved /_lfp/auth/ path without query or fragment"
+            );
+        }
+        anyhow::ensure!(
+            authorization.oidc_callback_path != authorization.oidc_logout_path,
+            "authorization OIDC callback and logout paths must differ"
+        );
+        anyhow::ensure!(
+            !authorization.oidc_session_key_file.trim().is_empty(),
+            "authorization.oidc_session_key_file cannot be empty"
+        );
+        anyhow::ensure!(
+            authorization.oidc_session_ttl_seconds > 0,
+            "authorization.oidc_session_ttl_seconds must be positive"
+        );
+    }
     anyhow::ensure!(
         authorization.header_timeout_ms > 0,
         "authorization.header_timeout_ms must be positive"
     );
     anyhow::ensure!(
-        authorization.max_header_bytes >= 1024,
-        "authorization.max_header_bytes must be at least 1024"
+        authorization.max_header_bytes >= 8192,
+        "authorization.max_header_bytes must be at least 8192"
     );
     Ok(())
 }
@@ -1055,10 +1203,14 @@ fn merge_authorization_defaults(
     };
 
     Ok(Some(ClientAuthorizationConfig {
+        bearer: route
+            .and_then(|settings| settings.bearer)
+            .or_else(|| defaults.and_then(|settings| settings.bearer)),
+        oidc: route
+            .and_then(|settings| settings.oidc)
+            .or_else(|| defaults.and_then(|settings| settings.oidc)),
         issuer: string_value(|settings| &settings.issuer, "issuer")?,
-        audiences: list_value(|settings| &settings.audiences).context(
-            "authorization.audiences is required in the route or [defaults.authorization]",
-        )?,
+        audiences: list_value(|settings| &settings.audiences).unwrap_or_default(),
         jwks_uri: route
             .and_then(|settings| settings.jwks_uri.clone())
             .or_else(|| defaults.and_then(|settings| settings.jwks_uri.clone())),
@@ -1101,6 +1253,30 @@ fn merge_authorization_defaults(
             .and_then(|settings| settings.max_header_bytes)
             .or_else(|| defaults.and_then(|settings| settings.max_header_bytes))
             .unwrap_or_else(default_auth_max_header_bytes),
+        oidc_client_id: route
+            .and_then(|settings| settings.oidc_client_id.clone())
+            .or_else(|| defaults.and_then(|settings| settings.oidc_client_id.clone())),
+        oidc_client_secret_file: route
+            .and_then(|settings| settings.oidc_client_secret_file.clone())
+            .or_else(|| defaults.and_then(|settings| settings.oidc_client_secret_file.clone())),
+        oidc_scopes: list_value(|settings| &settings.oidc_scopes)
+            .unwrap_or_else(default_browser_oidc_scopes),
+        oidc_callback_path: route
+            .and_then(|settings| settings.oidc_callback_path.clone())
+            .or_else(|| defaults.and_then(|settings| settings.oidc_callback_path.clone()))
+            .unwrap_or_else(default_oidc_callback_path),
+        oidc_logout_path: route
+            .and_then(|settings| settings.oidc_logout_path.clone())
+            .or_else(|| defaults.and_then(|settings| settings.oidc_logout_path.clone()))
+            .unwrap_or_else(default_oidc_logout_path),
+        oidc_session_key_file: route
+            .and_then(|settings| settings.oidc_session_key_file.clone())
+            .or_else(|| defaults.and_then(|settings| settings.oidc_session_key_file.clone()))
+            .unwrap_or_else(default_oidc_session_key_file),
+        oidc_session_ttl_seconds: route
+            .and_then(|settings| settings.oidc_session_ttl_seconds)
+            .or_else(|| defaults.and_then(|settings| settings.oidc_session_ttl_seconds))
+            .unwrap_or_else(default_oidc_session_ttl_seconds),
     }))
 }
 
@@ -1549,6 +1725,71 @@ mod tests {
         )
         .expect("authorization opt-out");
         assert!(configs[0].authorization.is_none());
+    }
+
+    #[test]
+    fn oidc_client_settings_enable_browser_and_bearer_defaults() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "protected"
+                hostname = "protected.example.com"
+
+                [[routes.path_routes]]
+                path_prefix = "/"
+                backend_addr = ":8081"
+
+                [routes.path_routes.authorization]
+                issuer = "https://auth.example/application/o/protected/"
+                audiences = ["protected-api"]
+                oidc_client_id = "protected-browser"
+                oidc_client_secret_file = "/run/secrets/protected_oidc_secret"
+            "#,
+        )
+        .expect("combined browser and bearer authorization");
+
+        let authorization = configs[0].backend_rules[1]
+            .authorization
+            .as_ref()
+            .expect("authorization");
+        assert!(authorization.bearer_enabled());
+        assert!(authorization.oidc_enabled());
+        assert_eq!(authorization.oidc_callback_path, "/_lfp/auth/callback");
+        assert_eq!(authorization.oidc_session_ttl_seconds, 28_800);
+    }
+
+    #[test]
+    fn existing_authorization_stays_bearer_only() {
+        let configs = parse_client_configs(
+            r#"
+                client_id = "legacy-bearer"
+                nats_url = "nats://localhost:4222"
+
+                [acme]
+                domain = "api.example.com"
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [authorization]
+                issuer = "https://auth.example/application/o/api/"
+                audiences = ["api"]
+
+                [[backend_rules]]
+                pattern = "api.example.com"
+                backend_addr = ":8080"
+            "#,
+        )
+        .expect("legacy bearer authorization");
+
+        let authorization = configs[0].authorization.as_ref().expect("authorization");
+        assert!(authorization.bearer_enabled());
+        assert!(!authorization.oidc_enabled());
     }
 
     #[test]

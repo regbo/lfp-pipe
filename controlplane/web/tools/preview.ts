@@ -36,6 +36,8 @@ backend_addr = "127.0.0.1:8081"
 backend_host = "127.0.0.1:8081"
 
 [routes.path_routes.authorization]
+bearer = true
+oidc = false
 issuer = "https://auth.example.com/application/o/lfp-pipe/"
 audiences = ["lfp-pipe"]
 jwks_uri = "https://auth.example.com/application/o/lfp-pipe/jwks/"

@@ -8,6 +8,7 @@ pub mod config_source;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub mod desktop;
 pub mod desktop_settings;
+mod http_proxy;
 mod oauth;
 mod paths;
 
@@ -48,26 +49,13 @@ struct AppState {
 #[derive(Clone)]
 pub(crate) struct BackendRuntime {
     rule: BackendRule,
-    authorization: Option<authorization::JwtAuthorizer>,
+    authorization: Option<authorization::Authorizer>,
 }
 
 impl BackendRuntime {
     fn matches_hostname(&self, hostname: Option<&str>) -> bool {
         matches_pattern(&self.rule.pattern, hostname)
     }
-}
-
-pub(crate) fn request_limits(backends: &[BackendRuntime]) -> (usize, Duration) {
-    backends
-        .iter()
-        .filter_map(|backend| backend.authorization.as_ref())
-        .fold(
-            (32 * 1024, Duration::from_secs(5)),
-            |(maximum, timeout), authorizer| {
-                let (policy_maximum, policy_timeout) = authorizer.request_limits();
-                (maximum.min(policy_maximum), timeout.min(policy_timeout))
-            },
-        )
 }
 
 pub(crate) fn select_runtime_for_path<'a>(
@@ -224,8 +212,8 @@ async fn process_messages(
         .context("failed to subscribe to request subject")?;
 
     let mut backends: Vec<BackendRuntime> = Vec::with_capacity(config.backend_rules.len());
-    let mut authorizers: Vec<(ClientAuthorizationConfig, authorization::JwtAuthorizer)> =
-        Vec::new();
+    let mut authorizers: Vec<(ClientAuthorizationConfig, authorization::Authorizer)> = Vec::new();
+    let authorization_hostname = config.acme.as_ref().map(|settings| settings.domain.clone());
     for rule in config.backend_rules.iter().cloned() {
         let policy = rule
             .authorization
@@ -237,9 +225,24 @@ async fn process_messages(
             {
                 Some(existing.clone())
             } else {
-                let loaded = authorization::JwtAuthorizer::load(policy.clone())
+                if policy.oidc_enabled() {
+                    anyhow::ensure!(
+                        !authorizers.iter().any(|(existing, _)| {
+                            existing.oidc_enabled()
+                                && (existing.oidc_callback_path == policy.oidc_callback_path
+                                    || existing.oidc_callback_path == policy.oidc_logout_path
+                                    || existing.oidc_logout_path == policy.oidc_callback_path
+                                    || existing.oidc_logout_path == policy.oidc_logout_path)
+                        }),
+                        "OIDC policies on the same client route must use distinct callback and logout paths"
+                    );
+                }
+                let hostname = authorization_hostname
+                    .as_deref()
+                    .context("backend authorization requires an ACME hostname")?;
+                let loaded = authorization::Authorizer::load(policy.clone(), hostname)
                     .await
-                    .context("initialize backend JWT authorization")?;
+                    .context("initialize backend authorization")?;
                 authorizers.push((policy, loaded.clone()));
                 Some(loaded)
             }
@@ -461,45 +464,21 @@ async fn bridge_connection(
                 && backend.rule.path_prefix.is_none()
         })
         .context("matching route has no fallback backend")?;
-    let (backend, buffered_request) = if plaintext_http && inspect_http {
-        let (maximum, header_timeout) = request_limits(&backends);
-        let request_bytes =
-            authorization::read_request_header(&mut server_stream, maximum, header_timeout).await?;
-        let path = authorization::request_path(&request_bytes)?;
-        let selected = select_runtime_for_path(&backends, request.hostname.as_deref(), path)
-            .context("HTTP request has no matching backend")?;
-        let mut request_bytes = match &selected.authorization {
-            Some(authorizer) => {
-                authorizer
-                    .authorize_request(&mut server_stream, request_bytes)
-                    .await?
-            }
-            None => request_bytes,
-        };
-        if selected.rule.strip_path_prefix {
-            request_bytes = authorization::strip_request_path_prefix(
-                request_bytes,
-                selected
-                    .rule
-                    .path_prefix
-                    .as_deref()
-                    .context("missing path_prefix")?,
-            )?;
-        }
-        if selected.rule.proxy_headers {
-            request_bytes = authorization::set_proxy_headers(
-                request_bytes,
-                request.client_ip.as_deref(),
-                if request.tls { "https" } else { "http" },
-            )?;
-        }
-        if let Some(host) = selected.rule.backend_host.as_deref() {
-            request_bytes = authorization::set_host_header(request_bytes, host)?;
-        }
-        (selected, Some(request_bytes))
-    } else {
-        (fallback, None)
-    };
+    if plaintext_http && inspect_http {
+        let hostname = request
+            .hostname
+            .clone()
+            .context("HTTP request has no hostname")?;
+        return http_proxy::serve(
+            server_stream,
+            hostname,
+            request.client_ip.clone(),
+            if request.tls { "https" } else { "http" },
+            backends,
+        )
+        .await;
+    }
+    let backend = fallback;
     let backend_addr = if plaintext_http {
         backend.rule.resolved_http_backend_addr()
     } else {
@@ -515,13 +494,6 @@ async fn bridge_connection(
     let mut backend_stream = TcpStream::connect(&backend_addr)
         .await
         .with_context(|| format!("failed to connect backend {backend_addr}"))?;
-    if let Some(prefix) = buffered_request {
-        backend_stream
-            .write_all(&prefix)
-            .await
-            .context("forward authorized HTTP request headers")?;
-    }
-
     let (to_server, to_backend) =
         copy_bidirectional_with_mode(&mut server_stream, &mut backend_stream, relay_mode)
             .await

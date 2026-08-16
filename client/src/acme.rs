@@ -22,14 +22,14 @@ use shared::{
     io::copy_bidirectional_buffered,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader, ReadBuf},
     net::TcpStream,
     sync::mpsc,
     time::{Duration, timeout},
 };
 use tracing::{debug, info, warn};
 
-use crate::{BackendRuntime, authorization, request_limits, select_runtime_for_path};
+use crate::{BackendRuntime, http_proxy};
 
 /// Cloneable ingress handle owned by request-processing tasks.
 #[derive(Clone)]
@@ -184,9 +184,7 @@ async fn run_acme(
                 let domain = config.domain.clone();
                 let client_ip = tls_stream.get_ref().get_ref().0.get_ref().client_ip.clone();
                 tokio::spawn(async move {
-                    if let Err(error) =
-                        bridge_tls(tls_stream, &domain, client_ip.as_deref(), &backends).await
-                    {
+                    if let Err(error) = bridge_tls(tls_stream, &domain, client_ip, backends).await {
                         warn!(?error, domain = %domain, "ACME TLS relay failed");
                     }
                 });
@@ -201,8 +199,8 @@ async fn run_acme(
 async fn bridge_tls<T>(
     tls_stream: T,
     hostname: &str,
-    client_ip: Option<&str>,
-    backends: &[BackendRuntime],
+    client_ip: Option<String>,
+    backends: Arc<Vec<BackendRuntime>>,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -242,49 +240,14 @@ where
         return Ok(());
     }
 
-    let (maximum, header_timeout) = request_limits(backends);
-    let request =
-        authorization::read_request_header(&mut tls_stream, maximum, header_timeout).await?;
-    let path = authorization::request_path(&request)?;
-    let backend = select_runtime_for_path(backends, Some(hostname), path)
-        .context("HTTP request has no matching backend")?;
-    let mut request = match &backend.authorization {
-        Some(authorizer) => {
-            authorizer
-                .authorize_request(&mut tls_stream, request)
-                .await?
-        }
-        None => request,
-    };
-    if backend.rule.strip_path_prefix {
-        request = authorization::strip_request_path_prefix(
-            request,
-            backend
-                .rule
-                .path_prefix
-                .as_deref()
-                .context("missing path_prefix")?,
-        )?;
-    }
-    if backend.rule.proxy_headers {
-        request = authorization::set_proxy_headers(request, client_ip, "https")?;
-    }
-    if let Some(host) = backend.rule.backend_host.as_deref() {
-        request = authorization::set_host_header(request, host)?;
-    }
-    let backend_addr = backend.rule.resolved_backend_addr();
-    let mut backend_stream = TcpStream::connect(&backend_addr)
-        .await
-        .with_context(|| format!("failed to connect backend {backend_addr}"))?;
-    backend_stream
-        .write_all(&request)
-        .await
-        .context("forward routed HTTP request headers")?;
-    let (to_client, to_backend) = copy_bidirectional_buffered(&mut tls_stream, &mut backend_stream)
-        .await
-        .context("ACME TLS copy_bidirectional failed")?;
-    debug!(to_client, to_backend, "ACME TLS relay finished");
-    Ok(())
+    http_proxy::serve(
+        tls_stream,
+        hostname.to_string(),
+        client_ip,
+        "https",
+        backends,
+    )
+    .await
 }
 
 fn prepare_cache_dir(path: &Path) -> anyhow::Result<()> {
