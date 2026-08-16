@@ -88,6 +88,9 @@ pub struct ServerConfig {
     #[serde(default = "default_claim_timeout_ms")]
     pub claim_timeout_ms: u64,
     /// Maximum wait for the winning client's callback socket.
+    ///
+    /// This setup deadline is removed before stream relay begins. Established
+    /// connections deliberately have no application-level idle timeout.
     #[serde(default = "default_pending_timeout_ms")]
     pub pending_timeout_ms: u64,
     /// Exact TLS SNI routes forwarded directly from the public listener.

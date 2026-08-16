@@ -85,11 +85,11 @@ func TestDeviceRegistryRejectsOlderCrossReplicaPresence(t *testing.T) {
 
 func TestOwnedEntitlementRequiresExactEffectiveEntitlement(t *testing.T) {
 	t.Parallel()
-	got, err := ownedEntitlement([]string{"route:pipe.lfpconnect.io"}, "pipe.lfpconnect.io", "pipe.lfpconnect.io")
-	if err != nil || got != "pipe.lfpconnect.io" {
+	got, err := ownedEntitlement([]string{"route:pipe.example.com"}, "pipe.example.com", "pipe.example.com")
+	if err != nil || got != "pipe.example.com" {
 		t.Fatalf("unexpected entitlement result %q: %v", got, err)
 	}
-	if _, err := ownedEntitlement([]string{"team.pipe.lfpconnect.io"}, "pipe.lfpconnect.io", "pipe.lfpconnect.io"); err == nil {
+	if _, err := ownedEntitlement([]string{"team.pipe.example.com"}, "pipe.example.com", "pipe.example.com"); err == nil {
 		t.Fatal("expected parent entitlement ownership to be denied")
 	}
 }

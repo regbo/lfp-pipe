@@ -6,7 +6,7 @@ request_subject = "tunnel.connect.request.librespeed"
 claim_ack_timeout_ms = 1500
 
 [[backend_rules]]
-pattern = "swarm01.lfpconnect.io"
+pattern = "swarm01.example.com"
 backend_addr = "127.0.0.1:8000"
 
 [[backend_rules]]

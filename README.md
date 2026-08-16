@@ -98,7 +98,7 @@ CLI flag > environment variable > TOML file > typed default
 
 Desktop installs do not require a configuration file. Starting the client with
 no arguments defaults to remote management at
-`https://pipe.lfpconnect.io`: the tray starts, a short-lived enrollment
+`https://pipe.example.com`: the tray starts, a short-lived enrollment
 page opens, and the signed-in owner approves the device and selects its route
 entitlement. The resulting Authentik service-account credential is stored in
 the operating-system user configuration directory. From then on the client
@@ -161,7 +161,10 @@ Backend addresses accept ordinary `host:port` values plus loopback shorthands:
 `7777` and `:7777` both resolve to `127.0.0.1:7777`. HTTP proxying follows
 Caddy's reverse-proxy defaults: the request method, URI, and public `Host` are
 preserved; trusted `X-Forwarded-*` headers are set; and a path prefix is removed
-only when `strip_path_prefix = true` is configured explicitly.
+only when `strip_path_prefix = true` is configured explicitly. Claim and
+pending timeouts apply only while pairing a new connection. Once paired, raw
+TCP and terminated-TLS relays have no application-level idle timeout; either
+endpoint owns connection lifetime, including SSE heartbeats and WebSockets.
 
 Each route gets its own OAuth ticket renewal and NATS subscription. If one
 route fails, the process exits so a service supervisor can restart the whole
@@ -172,7 +175,7 @@ For a client whose routes and authorization policy are managed entirely in the
 web console, the local TOML can contain only:
 
 ```toml
-control_plane_url = "https://pipe.lfpconnect.io"
+control_plane_url = "https://pipe.example.com"
 control_plane_config = true
 ```
 
@@ -369,4 +372,4 @@ mise run version:bump major
 - [`deploy/unraid/README.md`](deploy/unraid/README.md) documents the native
   LFPConnect client/server supervisors and LibreSpeed backend.
 
-Current LibreSpeed public endpoint: `http://swarm01.lfpconnect.io:7443/`.
+Example LibreSpeed public endpoint: `http://swarm01.example.com:7443/`.

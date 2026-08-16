@@ -43,4 +43,4 @@ public server configured under [`../swarm01`](../swarm01/README.md).
 tail -f /mnt/user/appdata/lfp-pipe/log/librespeed-client.log
 ```
 
-Public address: `http://swarm01.lfpconnect.io:7443/`.
+Public address: `http://swarm01.example.com:7443/`.

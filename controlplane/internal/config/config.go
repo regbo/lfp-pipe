@@ -68,7 +68,7 @@ func LoadArgs(args []string) (Config, error) {
 		AuthentikApplicationSlug: envOr("LFP_AUTH_AUTHENTIK_APPLICATION_SLUG", "lfp-pipe"),
 		OAuthTokenURL:            os.Getenv("LFP_AUTH_OAUTH_TOKEN_URL"),
 		NATSURLs:                 splitCSV(envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222")),
-		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "tls://pipe.lfpconnect.io:4222"))),
+		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "tls://pipe.example.com:4222"))),
 		NATSCalloutUser:          envOr("LFP_AUTH_NATS_CALLOUT_USER", "auth-svc"),
 		NATSTunnelAccount:        envOr("LFP_AUTH_NATS_TUNNEL_ACCOUNT", "TUNNELS"),
 		NATSRequestSubjectPrefix: envOr("LFP_AUTH_NATS_SUBJECT_PREFIX", "lfp.v1.connect"),

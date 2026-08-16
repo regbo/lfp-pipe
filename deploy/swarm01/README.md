@@ -28,4 +28,4 @@ restrict the unauthenticated data listener to trusted client source addresses.
 The advertised data address must be the public swarm address clients can reach,
 not a ZeroTier/ZeroBus alias when validating the real public path.
 
-Public address: `http://swarm01.lfpconnect.io:7443/`.
+Public address: `http://swarm01.example.com:7443/`.

@@ -16,14 +16,14 @@ func TestAuthorizeStrictSubdomain(t *testing.T) {
 func TestExactRouteEntitlement(t *testing.T) {
 	t.Parallel()
 	route, entitlement, err := MatchStrictSubdomain(
-		[]string{"regbodesktop.pipe.lfpconnect.io"},
-		"regbodesktop.pipe.lfpconnect.io",
-		"pipe.lfpconnect.io",
+		[]string{"desktop.pipe.example.com"},
+		"desktop.pipe.example.com",
+		"pipe.example.com",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route != "regbodesktop.pipe.lfpconnect.io" || entitlement != route {
+	if route != "desktop.pipe.example.com" || entitlement != route {
 		t.Fatalf("unexpected grant route=%q entitlement=%q", route, entitlement)
 	}
 }
@@ -31,14 +31,14 @@ func TestExactRouteEntitlement(t *testing.T) {
 func TestMostSpecificEntitlementWins(t *testing.T) {
 	t.Parallel()
 	_, entitlement, err := MatchStrictSubdomain(
-		[]string{"pipe.lfpconnect.io", "team.pipe.lfpconnect.io"},
-		"app.team.pipe.lfpconnect.io",
-		"pipe.lfpconnect.io",
+		[]string{"pipe.example.com", "team.pipe.example.com"},
+		"app.team.pipe.example.com",
+		"pipe.example.com",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entitlement != "team.pipe.lfpconnect.io" {
+	if entitlement != "team.pipe.example.com" {
 		t.Fatalf("unexpected entitlement %q", entitlement)
 	}
 }
