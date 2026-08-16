@@ -271,7 +271,12 @@ impl OidcAuthorizer {
             CsrfToken::new_random,
             Nonce::new_random,
         );
-        for scope in &self.config.oidc_scopes {
+        for scope in self
+            .config
+            .oidc_scopes
+            .iter()
+            .filter(|scope| !scope.eq_ignore_ascii_case("openid"))
+        {
             request = request.add_scope(Scope::new(scope.clone()));
         }
         let (url, state, nonce) = request.set_pkce_challenge(pkce_challenge).url();
