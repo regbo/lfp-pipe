@@ -5,8 +5,12 @@
 mod acme;
 mod authorization;
 pub mod config_source;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(all(
+    feature = "desktop",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 pub mod desktop;
+#[cfg(feature = "desktop")]
 pub mod desktop_settings;
 mod http_proxy;
 mod oauth;

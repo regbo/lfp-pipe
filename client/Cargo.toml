@@ -4,6 +4,17 @@ version = "0.1.12"
 edition = "2024"
 autobins = false
 
+[features]
+default = ["desktop"]
+desktop = [
+    "dep:auto-launcher",
+    "dep:open",
+    "dep:tiny-skia",
+    "dep:tinyfiledialogs",
+    "dep:tray-icon",
+    "dep:winit",
+]
+
 [lib]
 name = "client"
 
@@ -38,12 +49,12 @@ tokio-stream.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
-auto-launcher.workspace = true
+auto-launcher = { workspace = true, optional = true }
 dirs.workspace = true
-tinyfiledialogs.workspace = true
+tinyfiledialogs = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-open.workspace = true
-tray-icon.workspace = true
-tiny-skia.workspace = true
-winit.workspace = true
+open = { workspace = true, optional = true }
+tray-icon = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
