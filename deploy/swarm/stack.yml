@@ -94,7 +94,7 @@ services:
     image: ${LFP_SERVER_IMAGE:-lfp-pipe-server:latest}
     command: ["--config", "/etc/lfp-pipe/server.toml"]
     environment:
-      LFP_PIPE_ADVERTISED_DATA_ADDR: ${LFP_ADVERTISED_DATA_ADDR:?set LFP_ADVERTISED_DATA_ADDR}
+      LFP_PIPE_ADVERTISED_DATA_ADDR: "{{.Node.Hostname}}.${LFP_NODE_DOMAIN:?set LFP_NODE_DOMAIN}:${LFP_DATA_PORT:-7001}"
     configs:
       - source: lfp_server_config
         target: /etc/lfp-pipe/server.toml
@@ -105,13 +105,21 @@ services:
       - target: 7443
         published: ${LFP_PUBLIC_PORT:-7443}
         protocol: tcp
-        mode: ingress
+        mode: host
       - target: 7001
         published: ${LFP_DATA_PORT:-7001}
         protocol: tcp
-        mode: ingress
+        mode: host
     deploy:
-      replicas: 1
+      mode: global
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
       restart_policy:
         condition: on-failure
 

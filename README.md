@@ -387,4 +387,8 @@ mise run version:bump major
 - [`deploy/unraid/README.md`](deploy/unraid/README.md) documents the native
   LFPConnect client/server supervisors and LibreSpeed backend.
 
-Example LibreSpeed public endpoint: `http://swarm01.example.com:7443/`.
+The production Swarm deployment runs one server per manager. Public routes
+continue to enter through Traefik on port 443, while each server task publishes
+7001 directly on its node and advertises that manager's DNS name for callback
+affinity. Example LibreSpeed endpoint:
+`https://librespeed.pipe.example.com/`.

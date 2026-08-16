@@ -151,7 +151,9 @@ services:
     image: ${SERVER_IMAGE?Variable not set}
     command: ["--config", "/etc/lfp-pipe/server.toml"]
     environment:
-      LFP_PIPE_ADVERTISED_DATA_ADDR: ${SUBDOMAIN?Variable not set}.${DOMAIN?Variable not set}:7001
+      # Swarm renders Node.Hostname per task, keeping callbacks on the same
+      # manager that accepted the public connection.
+      LFP_PIPE_ADVERTISED_DATA_ADDR: "{{.Node.Hostname}}.${DOMAIN?Variable not set}:7001"
     configs:
       - source: server_config
         target: /etc/lfp-pipe/server.toml
@@ -161,13 +163,16 @@ services:
       - control
       - traefik-public
     ports:
+      # Callbacks return directly to the manager that accepted the public
+      # connection. Public ingress continues to enter through Traefik on 443.
       - target: 7001
         published: 7001
         protocol: tcp
-        mode: ingress
+        mode: host
     logging: *default-logging
     deploy:
-      replicas: 1
+      mode: global
+      endpoint_mode: dnsrr
       placement:
         constraints:
           - node.role == manager

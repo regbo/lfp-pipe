@@ -1,9 +1,27 @@
 # LFP Connect Swarm control plane
 
 This stack runs a three-replica Core NATS cluster, the Go Authentik/NATS Auth
-Callout service, the Bun-built web console, and one public `lfp-pipe-server`.
+Callout service, the Bun-built web console, and one public `lfp-pipe-server` on
+each manager.
 Tunnel payloads continue to flow directly through `lfp-pipe`; NATS remains the
 control plane.
+
+## Node-local data path
+
+The server is a global, manager-constrained service. Ports 7443 and 7001 use
+host publishing, and each task advertises
+`{{.Node.Hostname}}.<LFP_NODE_DOMAIN>:7001`. Create an A record for every
+manager hostname and point the route wildcard at the same manager addresses.
+
+Use `http://<route>:7443` (or TLS with the same explicit port) for the direct
+path. It lands on the selected manager's local server and avoids both Traefik
+and the Swarm overlay for payload bytes. The normal port 80/443 edge route may
+remain as a compatibility path, but Traefik can choose any server task and is
+not guaranteed to stay node-local.
+
+Only one host-mode task can own these ports on a manager. Retire any native
+`lfp-pipe-server` service using 7443 or 7001 before deploying the global Swarm
+service.
 
 ## Authorization model
 
