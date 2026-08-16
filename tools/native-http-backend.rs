@@ -1,3 +1,8 @@
+//! Minimal HTTP backend used for native tunnel throughput smoke tests.
+//!
+//! Compile with Rust 2024 and pass an optional listen address. The process
+//! supports bounded upload/download bodies so measurements focus on the tunnel.
+
 use std::{
     env,
     io::{Read, Write},
@@ -117,9 +122,3 @@ fn receive_upload(stream: &mut TcpStream, initial: &[u8]) -> std::io::Result<()>
         body.len()
     )
 }
-//! Minimal HTTP backend used for native tunnel throughput smoke tests.
-//!
-//! Compile with `rustc -O tools/native-http-backend.rs` and pass an optional
-//! listen address as the first argument. The process prints its selected
-//! address, supports bounded upload/download bodies, and avoids a web stack so
-//! measurements focus on the tunnel rather than application overhead.
