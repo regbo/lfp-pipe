@@ -390,5 +390,4 @@ mise run version:bump major
 The production Swarm deployment runs one server per manager. Public routes
 continue to enter through Traefik on port 443, while each server task publishes
 7001 directly on its node and advertises that manager's DNS name for callback
-affinity. Example LibreSpeed endpoint:
-`https://librespeed.pipe.example.com/`.
+affinity. Example TLS endpoint: `https://chat.pipe.example.com/`.
