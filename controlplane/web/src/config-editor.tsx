@@ -31,11 +31,29 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   const defaults = asTable(document.defaults);
   const oauth = asTable(defaults.oauth);
   const acme = asTable(defaults.acme);
+  const defaultTlsTermination = Object.keys(acme).length > 0 && acme.enabled !== false;
   const routes = asRoutes(document.routes);
   const setDefault = (key: string, value: unknown) => update((draft) => { childTable(draft, "defaults")[key] = value; });
+  const setOptionalDefault = (key: string, value: string) => update((draft) => {
+    const defaults = childTable(draft, "defaults");
+    if (value.trim()) defaults[key] = value;
+    else delete defaults[key];
+  });
   const setOAuth = (key: string, value: unknown) => update((draft) => { childTable(childTable(draft, "defaults"), "oauth")[key] = value; });
   const setAcme = (key: string, value: unknown) => update((draft) => { childTable(childTable(draft, "defaults"), "acme")[key] = value; });
   const setRoute = (index: number, key: string, value: unknown) => update((draft) => { asRoutes(draft.routes)[index][key] = value; });
+  const setOptionalRoute = (index: number, key: string, value: string) => update((draft) => {
+    const route = asRoutes(draft.routes)[index];
+    if (value.trim()) route[key] = value;
+    else delete route[key];
+  });
+  const setRouteTlsTermination = (index: number, enabled: boolean) => update((draft) => {
+    const route = asRoutes(draft.routes)[index];
+    const settings = childTable(route, "acme");
+    if (enabled === defaultTlsTermination) delete settings.enabled;
+    else settings.enabled = enabled;
+    if (Object.keys(settings).length === 0) delete route.acme;
+  });
   const setPath = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex][key] = value; });
   const setAuthorization = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => {
     childTable(asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex], "authorization")[key] = value;
@@ -46,9 +64,10 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
       <div className="config-section-heading">
         <div><h2 id="common-settings-heading">Common settings</h2><span>Used by every route unless a route overrides them.</span></div>
       </div>
-      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-        <TextField label="TLS backend" value={text(defaults.backend_addr)} onChange={(value) => setDefault("backend_addr", value)} />
-        <TextField label="HTTP backend" value={text(defaults.http_backend_addr)} onChange={(value) => setDefault("http_backend_addr", value)} />
+      <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+        <TextField label="Default backend" value={text(defaults.backend_addr)} onChange={(value) => setDefault("backend_addr", value)} hint="Port, :port, or host:port" />
+        <TextField label="Plain HTTP backend" value={text(defaults.http_backend_addr)} onChange={(value) => setOptionalDefault("http_backend_addr", value)} hint="Optional port 80 destination" />
+        <TextField label="Backend Host override" value={text(defaults.backend_host)} onChange={(value) => setOptionalDefault("backend_host", value)} hint="Incoming Host is preserved by default" />
         <TextField className="field-span-full" label="NATS URL" value={text(defaults.nats_url)} onChange={(value) => setDefault("nats_url", value)} />
       </SimpleGrid>
       <Accordion className="settings-disclosure" variant="contained">
@@ -83,7 +102,7 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
     <section className="config-root-section routes-section" aria-labelledby="routes-heading">
       <div className="config-section-heading"><div><h2 id="routes-heading">Routes</h2><span>{routes.length === 1 ? "1 public hostname" : `${routes.length} public hostnames`}</span></div><Button variant="light" leftSection={<Plus size={15} aria-hidden="true" />} type="button" onClick={() => update((draft) => { const items = asRoutes(draft.routes); items.push({ client_id: `route-${items.length + 1}`, hostname: "", path_routes: [] }); draft.routes = items; })}>Add route</Button></div>
       <div className="route-list">
-        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} setRoute={setRoute} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
+        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} defaultTlsTermination={defaultTlsTermination} setRoute={setRoute} setOptionalRoute={setOptionalRoute} setRouteTlsTermination={setRouteTlsTermination} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
         {routes.length === 0 ? <div className="routes-empty"><strong>No routes</strong><span>Add a public hostname to start forwarding traffic.</span></div> : null}
       </div>
     </section>
@@ -96,23 +115,34 @@ function SettingsGroup({ title, children }: { title: string; children: React.Rea
 
 type RouteEditorProps = {
   route: Route; routeIndex: number;
+  defaultTlsTermination: boolean;
   setRoute: (index: number, key: string, value: unknown) => void;
+  setOptionalRoute: (index: number, key: string, value: string) => void;
+  setRouteTlsTermination: (index: number, enabled: boolean) => void;
   setPath: (route: number, path: number, key: string, value: unknown) => void;
   setAuthorization: (route: number, path: number, key: string, value: unknown) => void;
   update: (mutator: (draft: Table) => void) => void;
 };
 
-function RouteEditor({ route, routeIndex, setRoute, setPath, setAuthorization, update }: RouteEditorProps) {
+function RouteEditor({ route, routeIndex, defaultTlsTermination, setRoute, setOptionalRoute, setRouteTlsTermination, setPath, setAuthorization, update }: RouteEditorProps) {
   const paths = asRoutes(route.path_routes) as PathRoute[];
+  const routeAcme = asTable(route.acme);
+  const tlsTermination = routeAcme.enabled === undefined ? defaultTlsTermination : bool(routeAcme.enabled);
   const routeName = text(route.hostname) || `Route ${routeIndex + 1}`;
   return <article className="route-config">
     <div className="route-header"><div className="route-number" aria-hidden="true">{routeIndex + 1}</div><TextField className="route-hostname" label="Public hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
     <div className="route-body">
-      <div className="path-list-heading"><strong>Path rules</strong><Button type="button" variant="subtle" leftSection={<Plus size={14} aria-hidden="true" />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/", backend_addr: "127.0.0.1:8080" }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button></div>
-      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All traffic uses the common backends.</p>}
-      <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="route-options"><Accordion.Control>Route options</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+      <SimpleGrid className="route-backends" cols={{ base: 1, sm: 3 }} spacing="sm">
+        <TextField label="Host backend" value={text(route.backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "backend_addr", value)} hint="Port, :port, or host:port" />
+        <TextField label="Plain HTTP backend" value={text(route.http_backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "http_backend_addr", value)} hint="Optional port 80 destination" />
+        <TextField label="Backend Host override" value={text(route.backend_host)} onChange={(value) => setOptionalRoute(routeIndex, "backend_host", value)} hint="Incoming Host is preserved by default" />
+      </SimpleGrid>
+      <div className="route-transport-options"><CheckboxField label="Terminate TLS" checked={tlsTermination} onChange={(enabled) => setRouteTlsTermination(routeIndex, enabled)} /><span>Plain HTTP is sniffed automatically; all other traffic uses the host backend.</span></div>
+      <div className="path-list-heading"><strong>Path rules</strong><Button type="button" variant="subtle" leftSection={<Plus size={14} aria-hidden="true" />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/", backend_addr: "8080" }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button></div>
+      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All paths use this host backend.</p>}
+      <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="route-options"><Accordion.Control>Advanced route settings</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
         <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
-        <TextField label="Backend override" value={text(route.backend_addr)} onChange={(value) => setRoute(routeIndex, "backend_addr", value)} />
+        <CheckboxField label="Set proxy headers" checked={route.proxy_headers === undefined ? true : bool(route.proxy_headers)} onChange={(value) => setRoute(routeIndex, "proxy_headers", value)} />
       </SimpleGrid></Accordion.Panel></Accordion.Item></Accordion>
     </div>
   </article>;
@@ -124,7 +154,8 @@ function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, up
   const authorization = asTable(path.authorization);
   const protectedRoute = Object.keys(authorization).length > 0 && authorization.enabled !== false;
   return <div className="path-config">
-    <div className="path-fields"><TextField className="path-field" label="Path" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><TextField className="path-field" label="Backend" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} /><CheckboxField label="Require JWT" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; const policy = asTable(target.authorization); if (Object.keys(policy).length > 0) { policy.enabled = enabled; target.authorization = policy; } else if (enabled) { target.authorization = { enabled: true, issuer: "", audiences: [], jwks_cache_file: "~/.cache/lfp-pipe/auth/jwks.json", roles_claim: "roles", required_roles: [], role_match: "any", algorithms: ["RS256"], jwks_refresh_seconds: 3600, jwks_max_stale_seconds: 604800, forward_authorization: false }; } })} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove path ${pathIndex + 1}`} aria-label={`Remove path ${pathIndex + 1}`} onClick={() => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes).splice(pathIndex, 1); })}><Trash2 size={15} aria-hidden="true" /></ActionIcon></div>
+    <div className="path-header"><strong>Path {pathIndex + 1}</strong><ActionIcon type="button" color="red" variant="subtle" title={`Remove path ${pathIndex + 1}`} aria-label={`Remove path ${pathIndex + 1}`} onClick={() => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes).splice(pathIndex, 1); })}><Trash2 size={15} aria-hidden="true" /></ActionIcon></div>
+    <div className="path-fields"><TextField className="path-field" label="Path" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><TextField className="path-field" label="Backend" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Port, :port, or host:port" /><CheckboxField label="Require JWT" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; const policy = asTable(target.authorization); if (Object.keys(policy).length > 0) { policy.enabled = enabled; target.authorization = policy; } else if (enabled) { target.authorization = { enabled: true, issuer: "", audiences: [], jwks_cache_file: "~/.cache/lfp-pipe/auth/jwks.json", roles_claim: "roles", required_roles: [], role_match: "any", algorithms: ["RS256"], jwks_refresh_seconds: 3600, jwks_max_stale_seconds: 604800, forward_authorization: false }; } })} /></div>
     <Accordion className="route-disclosure path-disclosure" variant="contained"><Accordion.Item value="path-options"><Accordion.Control>{protectedRoute ? "Security and request options" : "Request options"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <div className="request-options"><TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} /><Group className="request-option-toggles" gap="xl"><CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} /><CheckboxField label="Set proxy headers" checked={path.proxy_headers === undefined ? true : bool(path.proxy_headers)} onChange={(value) => setPath(routeIndex, pathIndex, "proxy_headers", value)} /></Group></div>
       {protectedRoute ? <div className="authorization-config"><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">

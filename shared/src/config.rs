@@ -654,7 +654,10 @@ impl BackendRule {
 }
 
 fn resolve_loopback_shorthand(address: &str) -> String {
-    if address.starts_with(':') {
+    let address = address.trim();
+    if address.bytes().all(|byte| byte.is_ascii_digit()) && !address.is_empty() {
+        format!("127.0.0.1:{address}")
+    } else if address.starts_with(':') {
         format!("127.0.0.1{address}")
     } else {
         address.to_string()
@@ -1189,8 +1192,18 @@ fn merge_oauth_defaults(
 mod tests {
     use super::{
         ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides,
-        parse_client_configs,
+        parse_client_configs, resolve_loopback_shorthand,
     };
+
+    #[test]
+    fn loopback_shorthand_accepts_bare_and_colon_prefixed_ports() {
+        assert_eq!(resolve_loopback_shorthand("7777"), "127.0.0.1:7777");
+        assert_eq!(resolve_loopback_shorthand(":7777"), "127.0.0.1:7777");
+        assert_eq!(
+            resolve_loopback_shorthand("localhost:7777"),
+            "localhost:7777"
+        );
+    }
 
     #[test]
     fn server_defaults_and_overrides_are_layered() {

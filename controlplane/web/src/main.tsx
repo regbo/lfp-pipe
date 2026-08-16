@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { strToU8, zipSync } from "fflate";
 import { Check, ChevronDown, Clock3, Copy, Download, KeyRound, LogOut, Trash2 } from "lucide-react";
 import { Badge, Button, Checkbox, Group, Loader, MantineProvider, Menu, Modal, Select, TextInput, UnstyledButton } from "@mantine/core";
-import { useMediaQuery } from "@mantine/hooks";
 import { ConfigEditor } from "./config-editor";
 import { appTheme, applyBrand, defaultBrand, type BrandSettings } from "./theme";
 import "@fontsource-variable/inter";
@@ -78,7 +77,6 @@ function App() {
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [devicesError, setDevicesError] = useState("");
   const [creationMode, setCreationMode] = useState<"access" | "temporary" | null>(null);
-  const fullScreenConfig = useMediaQuery("(max-width: 520px)");
 
   const effectiveEntitlements = useMemo(() =>
     Array.from(new Set((identity?.entitlements ?? []).map(normalizeEntitlement))).sort(), [identity]);
@@ -369,7 +367,7 @@ http_backend_addr = "127.0.0.1:80"
         </div>
         {error && <p className="error global-error" role="alert">{error}</p>}
       </section></main>
-      <Modal opened={editingPrincipal !== null} onClose={requestCloseConfig} title={editingPrincipal ? `Manage ${editingPrincipal.name || editingPrincipal.client_id}` : "Manage client"} size="xl" centered fullScreen={fullScreenConfig} closeButtonProps={{ disabled: configSaving, "aria-label": "Close configuration" }} classNames={{ content: "manage-config-content", body: "manage-config-body" }}>
+      <Modal opened={editingPrincipal !== null} onClose={requestCloseConfig} title={editingPrincipal ? `Manage ${editingPrincipal.name || editingPrincipal.client_id}` : "Manage client"} size="xl" centered closeButtonProps={{ disabled: configSaving, "aria-label": "Close configuration" }} classNames={{ content: "manage-config-content", body: "manage-config-body" }}>
         {editingPrincipal ? <div className="manage-config-editor"><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><Group className="config-footer" justify="space-between" align="center"><Badge color={configDirty ? "yellow" : "green"} variant="light">{configSaving ? "Saving…" : configDirty ? "Unsaved changes" : "Saved"}</Badge><Group className="config-footer-actions" gap="xs"><Button variant="light" leftSection={<Download size={16} />} onClick={exportCurrentConfig}>Export</Button><Button variant="default" disabled={configSaving} onClick={requestCloseConfig}>Close</Button><Button className="save-config-button" loading={configSaving} disabled={!configDirty} onClick={() => void saveConfig()}>Save changes</Button></Group></Group></div> : null}
       </Modal>
       <Modal opened={discardConfigOpen} onClose={() => setDiscardConfigOpen(false)} title="Discard unsaved changes?" size="sm" centered>

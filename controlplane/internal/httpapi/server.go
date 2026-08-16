@@ -374,6 +374,9 @@ claim_ack_timeout_ms = 1500
 backend_addr = "127.0.0.1:443"
 http_backend_addr = "127.0.0.1:80"
 
+[defaults.acme]
+production = true
+
 [defaults.oauth]
 token_url = %q
 provider_client_id = %q

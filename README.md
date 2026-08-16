@@ -157,6 +157,12 @@ precedence order is CLI/environment override, route value, shared default,
 then typed default. Because `client_id` must remain unique per active route,
 the `--client-id` override is rejected when a file contains multiple routes.
 
+Backend addresses accept ordinary `host:port` values plus loopback shorthands:
+`7777` and `:7777` both resolve to `127.0.0.1:7777`. HTTP proxying follows
+Caddy's reverse-proxy defaults: the request method, URI, and public `Host` are
+preserved; trusted `X-Forwarded-*` headers are set; and a path prefix is removed
+only when `strip_path_prefix = true` is configured explicitly.
+
 Each route gets its own OAuth ticket renewal and NATS subscription. If one
 route fails, the process exits so a service supervisor can restart the whole
 declared set instead of silently leaving only some hostnames available. The

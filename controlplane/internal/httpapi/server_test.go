@@ -3,11 +3,20 @@ package httpapi
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
 )
+
+func TestDefaultManagedClientConfigEnablesTLSTermination(t *testing.T) {
+	t.Parallel()
+	config := (&Server{}).defaultClientConfig("client", "host.pipe.example.com", "principal")
+	if !strings.Contains(config, "[defaults.acme]\nproduction = true") {
+		t.Fatalf("managed client config should enable production TLS termination:\n%s", config)
+	}
+}
 
 func TestEntitlementClaimsAcceptNamesAndObjects(t *testing.T) {
 	t.Parallel()

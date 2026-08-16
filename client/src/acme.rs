@@ -18,12 +18,14 @@ use futures::{Stream, StreamExt};
 use rustls_acme::{AcmeConfig, caches::DirCache};
 use shared::{
     config::{ClientAcmeConfig, RelayMode},
+    http::looks_like_http_prefix,
     io::copy_bidirectional_buffered,
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf},
     net::TcpStream,
     sync::mpsc,
+    time::{Duration, timeout},
 };
 use tracing::{debug, info, warn};
 
@@ -197,7 +199,7 @@ async fn run_acme(
 }
 
 async fn bridge_tls<T>(
-    mut tls_stream: T,
+    tls_stream: T,
     hostname: &str,
     client_ip: Option<&str>,
     backends: &[BackendRuntime],
@@ -205,6 +207,41 @@ async fn bridge_tls<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let fallback = backends
+        .iter()
+        .find(|backend| {
+            backend.matches_hostname(Some(hostname)) && backend.rule.path_prefix.is_none()
+        })
+        .context("matching route has no fallback backend")?;
+    let inspect_http = backends.iter().any(|backend| {
+        backend.rule.path_prefix.is_some()
+            || backend.rule.proxy_headers
+            || backend.rule.backend_host.is_some()
+            || backend.authorization.is_some()
+    });
+    let mut tls_stream = BufReader::new(tls_stream);
+    let http = if inspect_http {
+        match timeout(Duration::from_secs(2), tls_stream.fill_buf()).await {
+            Ok(Ok(prefix)) => !prefix.is_empty() && looks_like_http_prefix(prefix),
+            Ok(Err(error)) => return Err(error).context("inspect terminated TLS protocol"),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    if !http {
+        let backend_addr = fallback.rule.resolved_backend_addr();
+        let mut backend_stream = TcpStream::connect(&backend_addr)
+            .await
+            .with_context(|| format!("failed to connect backend {backend_addr}"))?;
+        let (to_client, to_backend) =
+            copy_bidirectional_buffered(&mut tls_stream, &mut backend_stream)
+                .await
+                .context("terminated TLS copy_bidirectional failed")?;
+        debug!(to_client, to_backend, "terminated TLS relay finished");
+        return Ok(());
+    }
+
     let (maximum, header_timeout) = request_limits(backends);
     let request =
         authorization::read_request_header(&mut tls_stream, maximum, header_timeout).await?;
