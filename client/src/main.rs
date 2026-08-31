@@ -1,3 +1,11 @@
+// Packaged desktop builds are tray applications. Marking the Windows release
+// binary as a GUI application keeps its native start-at-boot entry from
+// opening a terminal; debug and headless builds retain their console.
+#![cfg_attr(
+    all(target_os = "windows", feature = "desktop", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 fn main() -> anyhow::Result<()> {
     let runtime = shared::cli::parse_client_runtime()?;
     shared::logging::init(&runtime.log_filter)?;
