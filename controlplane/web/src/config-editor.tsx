@@ -90,9 +90,11 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   });
   const setPath = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex][key] = value; });
   const setAuthorization = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => {
-    const policy = childTable(asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex], "authorization");
+    const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
+    const policy = childTable(target, "authorization");
     if (value === undefined) delete policy[key];
     else policy[key] = value;
+    if (Object.keys(policy).length === 0) delete target.authorization;
   });
 
   return <div className="structured-config">
@@ -170,7 +172,7 @@ function RouteEditor({ route, routeIndex, defaults, defaultTlsTermination, defau
   const paths = asRoutes(route.path_routes) as PathRoute[];
   const routeAcme = asTable(route.acme);
   const routeAuthorization = asTable(route.authorization);
-  const inheritedAuthorization = Object.keys(routeAuthorization).length > 0 ? routeAuthorization : defaultAuthorization;
+  const inheritedAuthorization = { ...defaultAuthorization, ...routeAuthorization };
   const routeName = text(route.hostname) || `Route ${routeIndex + 1}`;
   return <article className="route-config">
     <div className="route-header"><div className="route-node" aria-hidden="true"><RouteIcon size={15} /></div><LinkField className="route-hostname" label="Public hostname" value={text(route.hostname)} defaultScheme="https://" onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
@@ -195,14 +197,22 @@ type PathEditorProps = { path: PathRoute; inheritedAuthorization: Table; routeIn
 
 function PathEditor({ path, inheritedAuthorization, routeIndex, pathIndex, setPath, setAuthorization, update }: PathEditorProps) {
   const authorization = asTable(path.authorization);
-  const hasAuthorizationOverride = Object.keys(authorization).length > 0;
-  const authorizationMode = !hasAuthorizationOverride ? "inherit" : authorization.enabled === false ? "off" : "on";
-  const inheritedProtection = Object.keys(inheritedAuthorization).length > 0 && inheritedAuthorization.enabled !== false;
+  const hasInheritedAuthorization = Object.keys(inheritedAuthorization).length > 0;
+  const hasLocalAuthorizationSettings = Object.keys(authorization).some((key) => key !== "enabled");
+  const authorizationMode = authorization.enabled !== undefined
+    ? bool(authorization.enabled) ? "on" : "off"
+    : hasInheritedAuthorization ? "inherit"
+    : hasLocalAuthorizationSettings ? "on"
+    : "inherit";
+  const inheritedProtection = hasInheritedAuthorization && inheritedAuthorization.enabled !== false;
   const protectedRoute = authorizationMode === "inherit" ? inheritedProtection : authorizationMode === "on";
   const setAuthorizationMode = (mode: string) => update((draft) => {
     const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
     if (mode === "inherit") {
-      delete target.authorization;
+      const policy = asTable(target.authorization);
+      delete policy.enabled;
+      if (Object.keys(policy).length === 0) delete target.authorization;
+      else target.authorization = policy;
       return;
     }
     const policy = childTable(target, "authorization");
@@ -213,8 +223,8 @@ function PathEditor({ path, inheritedAuthorization, routeIndex, pathIndex, setPa
     <div className="path-fields"><TextField className="path-field" label="Path" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><TextField className="path-field" label="Backend" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" /><InheritanceControl label="Protection" value={authorizationMode} inherited={inheritedProtection ? "On" : "Off"} onChange={setAuthorizationMode} /></div>
     <Accordion className="route-disclosure path-disclosure" variant="contained"><Accordion.Item value="path-options"><Accordion.Control>{protectedRoute ? "Security and request options" : "Request options"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <div className="request-options"><TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} /><Group className="request-option-toggles" gap="xl"><CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} /><InheritanceControl label="Proxy headers" value={path.proxy_headers === undefined ? "inherit" : bool(path.proxy_headers) ? "on" : "off"} inherited="Route default" onChange={(mode) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} /></Group></div>
-      {authorizationMode === "inherit" ? <div className="inherited-policy"><span className="inheritance-dot" aria-hidden="true" />Using inherited {inheritedProtection ? "protection" : "public access"}. Choose On to customize this path.</div> : null}
-      {authorizationMode === "on" ? <AuthorizationFields authorization={authorization} inherited={inheritedAuthorization} onChange={(key, value) => setAuthorization(routeIndex, pathIndex, key, value)} /> : null}
+      {authorizationMode === "inherit" ? <div className="inherited-policy"><span className="inheritance-dot" aria-hidden="true" />{inheritedProtection ? "Protection is inherited. Authentication methods and fields can still be overridden here." : "Public access is inherited."}</div> : null}
+      {protectedRoute ? <AuthorizationFields authorization={authorization} inherited={inheritedAuthorization} onChange={(key, value) => setAuthorization(routeIndex, pathIndex, key, value)} /> : null}
     </Stack></Accordion.Panel></Accordion.Item></Accordion>
   </div>;
 }
