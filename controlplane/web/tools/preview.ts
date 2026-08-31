@@ -25,17 +25,7 @@ username = "${demoUsername}"
 client_secret_file = "__central__"
 control_plane_url = "http://127.0.0.1:4173"
 
-[[routes]]
-client_id = "demo-regbodesktop"
-hostname = "demo.desktop.pipe.example.com"
-
-[[routes.path_routes]]
-path_prefix = "/api"
-strip_path_prefix = true
-backend_addr = "127.0.0.1:8081"
-backend_host = "127.0.0.1:8081"
-
-[routes.path_routes.authorization]
+[defaults.authorization]
 bearer = true
 oidc = false
 issuer = "https://auth.example.com/application/o/lfp-pipe/"
@@ -49,6 +39,16 @@ algorithms = ["RS256"]
 jwks_refresh_seconds = 3600
 jwks_max_stale_seconds = 604800
 forward_authorization = false
+
+[[routes]]
+client_id = "demo-regbodesktop"
+hostname = "demo.desktop.pipe.example.com"
+
+[[routes.path_routes]]
+path_prefix = "/api"
+strip_path_prefix = true
+backend_addr = "127.0.0.1:8081"
+backend_host = "127.0.0.1:8081"
 `],
 ]);
 const principals = [demoPrincipal];

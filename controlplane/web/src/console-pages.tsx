@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Download,
   Ellipsis,
+  ExternalLink,
   KeyRound,
   Monitor,
   Plus,
@@ -13,7 +14,7 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import { Badge, Button, Checkbox, Loader, Menu, Select, TextInput } from "@mantine/core";
+import { Badge, Button, Checkbox, Menu, Select, TextInput } from "@mantine/core";
 import type {
   CreationMode,
   Enrollment,
@@ -24,6 +25,7 @@ import type {
   ServicePrincipal,
 } from "./console-model";
 import { lastSeen } from "./console-model";
+import { linkHref } from "./link-utils";
 
 export function PageHeader({ title, description, actions }: { title: string; description: string; actions?: ReactNode }) {
   return <header className="page-header"><div><h1>{title}</h1><p>{description}</p></div>{actions ? <div className="page-actions">{actions}</div> : null}</header>;
@@ -96,7 +98,7 @@ export function MachinesPage(props: MachinesPageProps) {
             return <tr key={client.username}>
               <td className="select-column">{principal ? <Checkbox aria-label={`Select ${client.name || client.username}`} checked={props.selected.includes(principal.id)} onChange={() => props.onToggle(principal.id)} /> : null}</td>
               <td><button className="cell-link machine-cell" type="button" onClick={() => props.onOpen(client.username)}><strong>{client.name || client.username}</strong><span>{client.username}</span>{!client.presence_known ? <Badge size="xs" color="yellow" variant="light">Checking</Badge> : null}</button></td>
-              <td>{machineRoutes.length ? <div className="route-cell">{machineRoutes.slice(0, 2).map((route) => <code key={route.hostname}>{route.hostname}</code>)}{machineRoutes.length > 2 ? <span>+{machineRoutes.length - 2} more</span> : null}</div> : <span className="muted">—</span>}</td>
+              <td>{machineRoutes.length ? <div className="route-cell">{machineRoutes.slice(0, 2).map((route) => <a key={route.hostname} href={linkHref(route.hostname, "https://")} target="_blank" rel="noreferrer noopener">{route.hostname}<ExternalLink size={11} aria-hidden="true" /></a>)}{machineRoutes.length > 2 ? <span>+{machineRoutes.length - 2} more</span> : null}</div> : <span className="muted">—</span>}</td>
               <td><div className="secondary-lines"><strong>{client.version || "Unknown"}</strong><span>{client.platform || "Unknown platform"}</span></div></td>
               <td><Status client={client} /><time>{lastSeen(client)}</time></td>
               <td className="actions-column">{principal ? <RowMenu label={client.name || client.username} onDetails={() => props.onOpen(client.username)} onEdit={() => props.onEdit(principal)} onDelete={() => props.onDelete(principal)} /> : null}</td>
@@ -158,7 +160,7 @@ export function RoutesPage({ routes, search, onSearch, onEdit, onAdd }: { routes
     <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Hostname</th><th>Machine</th><th>Backend</th><th>TLS</th><th>Access</th><th className="actions-column"><span className="sr-only">Actions</span></th></tr></thead><tbody>
       {filtered.map((route, index) => {
         const protectedPaths = route.paths.filter((path) => path.protected).length;
-        return <tr key={`${route.principal.id}-${route.hostname}-${index}`}><td><button className="cell-link route-name" type="button" onClick={() => onEdit(route.principal)}>{route.hostname || "Unnamed route"}</button></td><td><div className="secondary-lines"><strong>{route.principal.name || route.principal.client_id}</strong><span>{route.principal.username}</span></div></td><td><div className="secondary-lines"><code>{route.backend || "Inherited"}</code>{route.httpBackend ? <span>HTTP {route.httpBackend}</span> : null}</div></td><td>{route.tls ? "Terminated" : "Passthrough"}</td><td>{protectedPaths ? `${protectedPaths} protected ${protectedPaths === 1 ? "path" : "paths"}` : "Open"}</td><td className="actions-column"><button className="icon-action" type="button" aria-label={`Edit ${route.hostname}`} onClick={() => onEdit(route.principal)}><Ellipsis size={18} /></button></td></tr>;
+        return <tr key={`${route.principal.id}-${route.hostname}-${index}`}><td><a className="route-name external-text-link" href={linkHref(route.hostname, "https://")} target="_blank" rel="noreferrer noopener">{route.hostname || "Unnamed route"}<ExternalLink size={12} aria-hidden="true" /></a></td><td><div className="secondary-lines"><strong>{route.principal.name || route.principal.client_id}</strong><span>{route.principal.username}</span></div></td><td><div className="secondary-lines"><code>{route.backend || "Inherited"}</code>{route.httpBackend ? <span>HTTP {route.httpBackend}</span> : null}</div></td><td>{route.tls ? "Terminated" : "Passthrough"}</td><td>{protectedPaths ? `${protectedPaths} protected ${protectedPaths === 1 ? "path" : "paths"}` : "Open"}</td><td className="actions-column"><button className="icon-action" type="button" aria-label={`Edit ${route.hostname}`} onClick={() => onEdit(route.principal)}><Ellipsis size={18} /></button></td></tr>;
       })}
     </tbody></table>{filtered.length === 0 ? <EmptyState title={query ? "No routes found" : "No routes registered"} copy={query ? "Try a different search." : "Add a public hostname to a machine configuration."} action={!query ? <Button variant="default" onClick={onAdd}>Add route</Button> : null} /> : null}</div>
   </>;
@@ -170,7 +172,7 @@ export function AccessPage({ routes, onEdit }: { routes: RouteSummary[]; onEdit:
     <PageHeader title="Access controls" description="Review authentication and role requirements on public paths." />
     <div className="result-count">{policies.length} protected {policies.length === 1 ? "path" : "paths"}</div>
     <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Route</th><th>Path</th><th>Authentication</th><th>Required roles</th><th>Machine</th><th className="actions-column"><span className="sr-only">Actions</span></th></tr></thead><tbody>
-      {policies.map(({ route, path }, index) => <tr key={`${route.principal.id}-${route.hostname}-${path.path}-${index}`}><td><strong>{route.hostname}</strong></td><td><code>{path.path}</code></td><td>{path.methods.join(" + ") || "Protected"}</td><td>{path.roles.length ? path.roles.join(", ") : "Any authenticated user"}</td><td>{route.principal.name || route.principal.client_id}</td><td className="actions-column"><button className="icon-action" type="button" aria-label={`Edit access for ${route.hostname}${path.path}`} onClick={() => onEdit(route.principal)}><Ellipsis size={18} /></button></td></tr>)}
+      {policies.map(({ route, path }, index) => <tr key={`${route.principal.id}-${route.hostname}-${path.path}-${index}`}><td><a className="external-text-link" href={linkHref(route.hostname, "https://")} target="_blank" rel="noreferrer noopener"><strong>{route.hostname}</strong><ExternalLink size={12} aria-hidden="true" /></a></td><td><code>{path.path}</code></td><td>{path.methods.join(" + ") || "Protected"}</td><td>{path.roles.length ? path.roles.join(", ") : "Any authenticated user"}</td><td>{route.principal.name || route.principal.client_id}</td><td className="actions-column"><button className="icon-action" type="button" aria-label={`Edit access for ${route.hostname}${path.path}`} onClick={() => onEdit(route.principal)}><Ellipsis size={18} /></button></td></tr>)}
     </tbody></table>{policies.length === 0 ? <EmptyState title="No protected paths" copy="Enable path protection in a machine’s route configuration to require bearer tokens, browser sign-in, or roles." /> : null}</div>
   </>;
 }
@@ -188,7 +190,7 @@ export function KeysPage({ principals, loading, error, selected, onToggle, onCre
 export function SettingsPage({ identity, entitlements, onMachines }: { identity: Identity; entitlements: string[]; onMachines: () => void }) {
   return <>
     <PageHeader title="Settings" description="Network identity and registration boundaries for this control plane." />
-    <section className="settings-section"><div className="settings-heading"><h2>Pipe domain</h2><p>The public suffix used to register routes and issue client credentials.</p></div><dl className="definition-grid"><dt>Domain suffix</dt><dd><code>{identity.required_entitlement}</code></dd><dt>Route pattern</dt><dd><code>{identity.route_pattern}</code></dd><dt>Control plane</dt><dd><code>{identity.control_plane_url}</code></dd></dl></section>
+    <section className="settings-section"><div className="settings-heading"><h2>Pipe domain</h2><p>The public suffix used to register routes and issue client credentials.</p></div><dl className="definition-grid"><dt>Domain suffix</dt><dd><code>{identity.required_entitlement}</code></dd><dt>Route pattern</dt><dd><code>{identity.route_pattern}</code></dd><dt>Control plane</dt><dd><a className="external-text-link" href={linkHref(identity.control_plane_url)} target="_blank" rel="noreferrer noopener"><code>{identity.control_plane_url}</code><ExternalLink size={12} aria-hidden="true" /></a></dd></dl></section>
     <section className="settings-section"><div className="settings-heading"><h2>Authorized domains</h2><p>Domains granted by your identity provider.</p></div><div className="domain-list">{entitlements.map((entitlement) => <code key={entitlement}>{entitlement}</code>)}</div></section>
     <section className="settings-section"><div className="settings-heading"><h2>Client configuration</h2><p>Transport, identity, certificates, backends, path routing, and authorization are configured per machine.</p></div><Button variant="default" onClick={onMachines}>Manage machines</Button></section>
   </>;
@@ -203,5 +205,5 @@ function EmptyState({ title, copy, action }: { title: string; copy: string; acti
 }
 
 function LoadingRow({ label }: { label: string }) {
-  return <div className="loading-row" role="status"><Loader size="xs" /><span>{label}</span></div>;
+  return <div className="loading-row" role="status"><span className="loading-pulse" aria-hidden="true" /><span>{label}</span></div>;
 }

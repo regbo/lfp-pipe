@@ -18,7 +18,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Button, Group, Loader, Menu, Modal, Select, TextInput, UnstyledButton } from "@mantine/core";
+import { Button, Group, Menu, Modal, Select, TextInput, UnstyledButton } from "@mantine/core";
 import { ConfigEditor } from "./config-editor";
 import {
   AccessPage,
@@ -440,7 +440,7 @@ http_backend_addr = ":80"
     window.location.assign("/");
   }
 
-  if (!identity) return <div className="loading" role="status" aria-label="Loading management console"><Loader /></div>;
+  if (!identity) return <div className="loading" role="status" aria-label="Loading management console"><span className="loading-pulse" aria-hidden="true" /></div>;
 
   const openCreation = (mode: Exclude<CreationMode, null>) => {
     setIssued(null);

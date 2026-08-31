@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
+import { Check, ExternalLink, Pencil, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
-import { Accordion, ActionIcon, Button, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
+import { Accordion, ActionIcon, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
+import { linkHref } from "./link-utils";
 
 type Table = Record<string, unknown>;
 type Route = Table & { path_routes?: PathRoute[] };
@@ -56,7 +57,9 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   const defaults = asTable(document.defaults);
   const oauth = asTable(defaults.oauth);
   const acme = asTable(defaults.acme);
+  const authorization = asTable(defaults.authorization);
   const defaultTlsTermination = Object.keys(acme).length > 0 && acme.enabled !== false;
+  const defaultAuthorizationEnabled = Object.keys(authorization).length > 0 && authorization.enabled !== false;
   const routes = asRoutes(document.routes);
   const setDefault = (key: string, value: unknown) => update((draft) => { childTable(draft, "defaults")[key] = value; });
   const setOptionalDefault = (key: string, value: string) => update((draft) => {
@@ -66,22 +69,30 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   });
   const setOAuth = (key: string, value: unknown) => update((draft) => { childTable(childTable(draft, "defaults"), "oauth")[key] = value; });
   const setAcme = (key: string, value: unknown) => update((draft) => { childTable(childTable(draft, "defaults"), "acme")[key] = value; });
+  const setDefaultAuthorization = (key: string, value: unknown) => update((draft) => { childTable(childTable(draft, "defaults"), "authorization")[key] = value; });
+  const setDefaultAuthorizationEnabled = (enabled: boolean) => update((draft) => {
+    const policy = childTable(childTable(draft, "defaults"), "authorization");
+    if (enabled && Object.keys(policy).length === 0) Object.assign(policy, defaultAuthorization());
+    policy.enabled = enabled;
+  });
   const setRoute = (index: number, key: string, value: unknown) => update((draft) => { asRoutes(draft.routes)[index][key] = value; });
   const setOptionalRoute = (index: number, key: string, value: string) => update((draft) => {
     const route = asRoutes(draft.routes)[index];
     if (value.trim()) route[key] = value;
     else delete route[key];
   });
-  const setRouteTlsTermination = (index: number, enabled: boolean) => update((draft) => {
+  const setRouteTlsTermination = (index: number, mode: string) => update((draft) => {
     const route = asRoutes(draft.routes)[index];
     const settings = childTable(route, "acme");
-    if (enabled === defaultTlsTermination) delete settings.enabled;
-    else settings.enabled = enabled;
+    if (mode === "inherit") delete settings.enabled;
+    else settings.enabled = mode === "on";
     if (Object.keys(settings).length === 0) delete route.acme;
   });
   const setPath = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex][key] = value; });
   const setAuthorization = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => {
-    childTable(asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex], "authorization")[key] = value;
+    const policy = childTable(asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex], "authorization");
+    if (value === undefined) delete policy[key];
+    else policy[key] = value;
   });
 
   return <div className="structured-config">
@@ -93,7 +104,7 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
         <TextField label="Default backend" value={text(defaults.backend_addr)} onChange={(value) => setDefault("backend_addr", value)} hint="Bare port, :port for localhost, or host:port" />
         <TextField label="Plain HTTP backend" value={text(defaults.http_backend_addr)} onChange={(value) => setOptionalDefault("http_backend_addr", value)} hint="Optional; accepts port, :port, or host:port" />
         <TextField label="Backend Host override" value={text(defaults.backend_host)} onChange={(value) => setOptionalDefault("backend_host", value)} hint="Incoming Host is preserved by default" />
-        <TextField className="field-span-full" label="NATS URL" value={text(defaults.nats_url)} onChange={(value) => setDefault("nats_url", value)} />
+        <LinkField className="field-span-full" label="NATS URL" value={text(defaults.nats_url)} onChange={(value) => setDefault("nats_url", value)} />
       </SimpleGrid>
       <Accordion className="settings-disclosure" variant="contained">
         <Accordion.Item value="advanced"><Accordion.Control>Advanced common settings</Accordion.Control><Accordion.Panel><Stack gap="lg">
@@ -105,20 +116,24 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
           </SettingsGroup>
           <SettingsGroup title="Identity">
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-              <TextField label="Token URL" value={text(oauth.token_url)} onChange={(value) => setOAuth("token_url", value)} />
+              <LinkField label="Token URL" value={text(oauth.token_url)} onChange={(value) => setOAuth("token_url", value)} />
               <TextField label="Provider client ID" value={text(oauth.provider_client_id)} onChange={(value) => setOAuth("provider_client_id", value)} />
               <TextField label="Service username" value={text(oauth.username)} onChange={(value) => setOAuth("username", value)} />
               <TextField label="Secret file" value={text(oauth.client_secret_file)} onChange={(value) => setOAuth("client_secret_file", value)} />
-              <TextField className="field-span-full" label="Control plane URL" value={text(oauth.control_plane_url)} onChange={(value) => setOAuth("control_plane_url", value)} />
+              <LinkField className="field-span-full" label="Control plane URL" value={text(oauth.control_plane_url)} onChange={(value) => setOAuth("control_plane_url", value)} />
               <TextField className="field-span-full" label="Scopes" value={list(oauth.scopes)} onChange={(value) => setOAuth("scopes", splitList(value))} hint="Comma separated" />
             </SimpleGrid>
           </SettingsGroup>
           <SettingsGroup title="Certificates">
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-              <TextField label="Contacts" value={list(acme.contacts)} onChange={(value) => setAcme("contacts", splitList(value))} hint="Comma separated mailto addresses" />
+              <LinkField label="Contacts" value={list(acme.contacts)} onChange={(value) => setAcme("contacts", splitList(value))} hint="Comma separated mailto addresses" multiple />
               <TextField label="Cache directory" value={text(acme.cache_dir) || "~/.cache/lfp-pipe/acme"} onChange={(value) => setAcme("cache_dir", value)} />
             </SimpleGrid>
             <CheckboxField label="Use production ACME" checked={bool(acme.production)} onChange={(value) => setAcme("production", value)} />
+          </SettingsGroup>
+          <SettingsGroup title="Access defaults">
+            <div className="authorization-scope"><div><strong>Protect routes by default</strong><span>Path rules inherit this policy unless they explicitly override it.</span></div><SegmentedControl className="inheritance-control" size="xs" value={defaultAuthorizationEnabled ? "on" : "off"} data={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={(value) => setDefaultAuthorizationEnabled(value === "on")} /></div>
+            {defaultAuthorizationEnabled ? <AuthorizationFields authorization={authorization} onChange={setDefaultAuthorization} /> : null}
           </SettingsGroup>
         </Stack></Accordion.Panel></Accordion.Item>
       </Accordion>
@@ -127,7 +142,7 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
     <section className="config-root-section routes-section" aria-labelledby="routes-heading">
       <div className="config-section-heading"><div><h2 id="routes-heading">Public routes</h2><span>{routes.length === 1 ? "1 registered hostname" : `${routes.length} registered hostnames`}</span></div><Button variant="light" leftSection={<Plus size={15} aria-hidden="true" />} type="button" onClick={() => update((draft) => { const items = asRoutes(draft.routes); items.push({ client_id: `route-${items.length + 1}`, hostname: "", path_routes: [] }); draft.routes = items; })}>Add route</Button></div>
       <div className="route-list">
-        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} defaultTlsTermination={defaultTlsTermination} setRoute={setRoute} setOptionalRoute={setOptionalRoute} setRouteTlsTermination={setRouteTlsTermination} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
+        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} defaults={defaults} defaultTlsTermination={defaultTlsTermination} defaultAuthorization={authorization} setRoute={setRoute} setOptionalRoute={setOptionalRoute} setRouteTlsTermination={setRouteTlsTermination} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
         {routes.length === 0 ? <div className="routes-empty"><strong>No routes</strong><span>Add a public hostname to start forwarding traffic.</span></div> : null}
       </div>
     </section>
@@ -140,75 +155,127 @@ function SettingsGroup({ title, children }: { title: string; children: React.Rea
 
 type RouteEditorProps = {
   route: Route; routeIndex: number;
+  defaults: Table;
   defaultTlsTermination: boolean;
+  defaultAuthorization: Table;
   setRoute: (index: number, key: string, value: unknown) => void;
   setOptionalRoute: (index: number, key: string, value: string) => void;
-  setRouteTlsTermination: (index: number, enabled: boolean) => void;
+  setRouteTlsTermination: (index: number, mode: string) => void;
   setPath: (route: number, path: number, key: string, value: unknown) => void;
   setAuthorization: (route: number, path: number, key: string, value: unknown) => void;
   update: (mutator: (draft: Table) => void) => void;
 };
 
-function RouteEditor({ route, routeIndex, defaultTlsTermination, setRoute, setOptionalRoute, setRouteTlsTermination, setPath, setAuthorization, update }: RouteEditorProps) {
+function RouteEditor({ route, routeIndex, defaults, defaultTlsTermination, defaultAuthorization, setRoute, setOptionalRoute, setRouteTlsTermination, setPath, setAuthorization, update }: RouteEditorProps) {
   const paths = asRoutes(route.path_routes) as PathRoute[];
   const routeAcme = asTable(route.acme);
-  const tlsTermination = routeAcme.enabled === undefined ? defaultTlsTermination : bool(routeAcme.enabled);
+  const routeAuthorization = asTable(route.authorization);
+  const inheritedAuthorization = Object.keys(routeAuthorization).length > 0 ? routeAuthorization : defaultAuthorization;
   const routeName = text(route.hostname) || `Route ${routeIndex + 1}`;
   return <article className="route-config">
-    <div className="route-header"><div className="route-node" aria-hidden="true"><RouteIcon size={15} /></div><TextField className="route-hostname" label="Public hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
+    <div className="route-header"><div className="route-node" aria-hidden="true"><RouteIcon size={15} /></div><LinkField className="route-hostname" label="Public hostname" value={text(route.hostname)} defaultScheme="https://" onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
     <div className="route-body">
       <SimpleGrid className="route-backends" cols={{ base: 1, sm: 3 }} spacing="sm">
-        <TextField label="Host backend" value={text(route.backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" />
-        <TextField label="Plain HTTP backend" value={text(route.http_backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "http_backend_addr", value)} hint="Optional; accepts port, :port, or host:port" />
-        <TextField label="Backend Host override" value={text(route.backend_host)} onChange={(value) => setOptionalRoute(routeIndex, "backend_host", value)} hint="Incoming Host is preserved by default" />
+        <TextField label="Host backend" value={text(route.backend_addr)} placeholder={text(defaults.backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" />
+        <TextField label="Plain HTTP backend" value={text(route.http_backend_addr)} placeholder={text(defaults.http_backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "http_backend_addr", value)} hint="Optional; accepts port, :port, or host:port" />
+        <TextField label="Backend Host override" value={text(route.backend_host)} placeholder={text(defaults.backend_host)} onChange={(value) => setOptionalRoute(routeIndex, "backend_host", value)} hint="Incoming Host is preserved by default" />
       </SimpleGrid>
-      <div className="route-transport-options"><CheckboxField label="Terminate TLS" checked={tlsTermination} onChange={(enabled) => setRouteTlsTermination(routeIndex, enabled)} /><span>Pipe detects plain HTTP automatically; every other connection uses the host backend.</span></div>
+      <div className="route-transport-options"><InheritanceControl label="TLS termination" value={routeAcme.enabled === undefined ? "inherit" : bool(routeAcme.enabled) ? "on" : "off"} inherited={defaultTlsTermination ? "On" : "Off"} onChange={(mode) => setRouteTlsTermination(routeIndex, mode)} /><span>Pipe detects plain HTTP automatically; every other connection uses the host backend.</span></div>
       <div className="path-list-heading"><strong>Path rules</strong><Button type="button" variant="subtle" leftSection={<Plus size={14} aria-hidden="true" />} onClick={() => update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/", backend_addr: "8080" }); routes[routeIndex].path_routes = pathRoutes; })}>Add path</Button></div>
-      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All paths use this host backend.</p>}
+      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} inheritedAuthorization={inheritedAuthorization} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All paths use this host backend.</p>}
       <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="route-options"><Accordion.Control>Advanced route settings</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
         <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
-        <CheckboxField label="Set proxy headers" checked={route.proxy_headers === undefined ? true : bool(route.proxy_headers)} onChange={(value) => setRoute(routeIndex, "proxy_headers", value)} />
+        <InheritanceControl label="Proxy headers" value={route.proxy_headers === undefined ? "inherit" : bool(route.proxy_headers) ? "on" : "off"} inherited={bool(defaults.proxy_headers, true) ? "On" : "Off"} onChange={(mode) => update((draft) => { const target = asRoutes(draft.routes)[routeIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} />
       </SimpleGrid></Accordion.Panel></Accordion.Item></Accordion>
     </div>
   </article>;
 }
 
-type PathEditorProps = { path: PathRoute; routeIndex: number; pathIndex: number; setPath: RouteEditorProps["setPath"]; setAuthorization: RouteEditorProps["setAuthorization"]; update: RouteEditorProps["update"] };
+type PathEditorProps = { path: PathRoute; inheritedAuthorization: Table; routeIndex: number; pathIndex: number; setPath: RouteEditorProps["setPath"]; setAuthorization: RouteEditorProps["setAuthorization"]; update: RouteEditorProps["update"] };
 
-function PathEditor({ path, routeIndex, pathIndex, setPath, setAuthorization, update }: PathEditorProps) {
+function PathEditor({ path, inheritedAuthorization, routeIndex, pathIndex, setPath, setAuthorization, update }: PathEditorProps) {
   const authorization = asTable(path.authorization);
-  const protectedRoute = Object.keys(authorization).length > 0 && authorization.enabled !== false;
-  const bearerEnabled = authorization.bearer === undefined ? true : bool(authorization.bearer);
-  const oidcEnabled = authorization.oidc === undefined ? Boolean(text(authorization.oidc_client_id)) : bool(authorization.oidc);
+  const hasAuthorizationOverride = Object.keys(authorization).length > 0;
+  const authorizationMode = !hasAuthorizationOverride ? "inherit" : authorization.enabled === false ? "off" : "on";
+  const inheritedProtection = Object.keys(inheritedAuthorization).length > 0 && inheritedAuthorization.enabled !== false;
+  const protectedRoute = authorizationMode === "inherit" ? inheritedProtection : authorizationMode === "on";
+  const setAuthorizationMode = (mode: string) => update((draft) => {
+    const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
+    if (mode === "inherit") {
+      delete target.authorization;
+      return;
+    }
+    const policy = childTable(target, "authorization");
+    policy.enabled = mode === "on";
+  });
   return <div className="path-config">
     <div className="path-header"><strong>Path {pathIndex + 1}</strong><ActionIcon type="button" color="red" variant="subtle" title={`Remove path ${pathIndex + 1}`} aria-label={`Remove path ${pathIndex + 1}`} onClick={() => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes).splice(pathIndex, 1); })}><Trash2 size={15} aria-hidden="true" /></ActionIcon></div>
-    <div className="path-fields"><TextField className="path-field" label="Path" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><TextField className="path-field" label="Backend" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" /><CheckboxField label="Protect path" checked={protectedRoute} onChange={(enabled) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; const policy = asTable(target.authorization); if (Object.keys(policy).length > 0) { policy.enabled = enabled; target.authorization = policy; } else if (enabled) { target.authorization = defaultAuthorization(); } })} /></div>
+    <div className="path-fields"><TextField className="path-field" label="Path" value={text(path.path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><TextField className="path-field" label="Backend" value={text(path.backend_addr)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" /><InheritanceControl label="Protection" value={authorizationMode} inherited={inheritedProtection ? "On" : "Off"} onChange={setAuthorizationMode} /></div>
     <Accordion className="route-disclosure path-disclosure" variant="contained"><Accordion.Item value="path-options"><Accordion.Control>{protectedRoute ? "Security and request options" : "Request options"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
-      <div className="request-options"><TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} /><Group className="request-option-toggles" gap="xl"><CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} /><CheckboxField label="Set proxy headers" checked={path.proxy_headers === undefined ? true : bool(path.proxy_headers)} onChange={(value) => setPath(routeIndex, pathIndex, "proxy_headers", value)} /></Group></div>
-      {protectedRoute ? <div className="authorization-config">
-        <Group className="authorization-methods" gap="xl"><CheckboxField label="Bearer tokens" checked={bearerEnabled} onChange={(value) => setAuthorization(routeIndex, pathIndex, "bearer", value)} /><CheckboxField label="Browser OIDC" checked={oidcEnabled} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc", value)} /></Group>
-        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-        <TextField className="field-span-full" label="Issuer" value={text(authorization.issuer)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "issuer", value)} />
-        {bearerEnabled ? <TextField label="Audiences" value={list(authorization.audiences)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "audiences", splitList(value))} hint="Comma separated" /> : null}
-        <TextField label="Required roles" value={list(authorization.required_roles)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "required_roles", splitList(value))} hint="Comma separated" />
-        <TextField label="Roles claim" value={text(authorization.roles_claim)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "roles_claim", value)} />
-        <SelectField label="Role matching" value={text(authorization.role_match) || "any"} options={["any", "all"]} onChange={(value) => setAuthorization(routeIndex, pathIndex, "role_match", value)} />
-        {bearerEnabled ? <TextField className="field-span-full" label="JWKS URL" value={text(authorization.jwks_uri)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "jwks_uri", value)} /> : null}
-        {bearerEnabled ? <TextField className="field-span-full" label="JWKS cache file" value={text(authorization.jwks_cache_file) || "~/.cache/lfp-pipe/auth/jwks.json"} onChange={(value) => setAuthorization(routeIndex, pathIndex, "jwks_cache_file", value)} /> : null}
-        {oidcEnabled ? <TextField label="OIDC client ID" value={text(authorization.oidc_client_id)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_client_id", value)} /> : null}
-        {oidcEnabled ? <TextField label="OIDC secret file" value={text(authorization.oidc_client_secret_file)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_client_secret_file", value)} /> : null}
-        {oidcEnabled ? <TextField className="field-span-full" label="OIDC scopes" value={list(authorization.oidc_scopes) || "openid, profile, email, groups"} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_scopes", splitList(value))} hint="Comma separated" /> : null}
-        {oidcEnabled ? <TextField label="Callback path" value={text(authorization.oidc_callback_path) || "/_lfp/auth/callback"} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_callback_path", value)} /> : null}
-        {oidcEnabled ? <TextField label="Logout path" value={text(authorization.oidc_logout_path) || "/_lfp/auth/logout"} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_logout_path", value)} /> : null}
-        {oidcEnabled ? <TextField label="Session key file" value={text(authorization.oidc_session_key_file) || "~/.secrets/lfp-pipe/oidc-session-key"} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_session_key_file", value)} /> : null}
-        {oidcEnabled ? <NumberField label="Session lifetime" suffix=" s" value={number(authorization.oidc_session_ttl_seconds, 28800)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "oidc_session_ttl_seconds", value)} /> : null}
-      </SimpleGrid>{bearerEnabled ? <Group gap="xl"><CheckboxField label="Forward Authorization header" checked={bool(authorization.forward_authorization)} onChange={(value) => setAuthorization(routeIndex, pathIndex, "forward_authorization", value)} /></Group> : null}</div> : null}
+      <div className="request-options"><TextField label="Backend Host header" value={text(path.backend_host)} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} /><Group className="request-option-toggles" gap="xl"><CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} /><InheritanceControl label="Proxy headers" value={path.proxy_headers === undefined ? "inherit" : bool(path.proxy_headers) ? "on" : "off"} inherited="Route default" onChange={(mode) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} /></Group></div>
+      {authorizationMode === "inherit" ? <div className="inherited-policy"><span className="inheritance-dot" aria-hidden="true" />Using inherited {inheritedProtection ? "protection" : "public access"}. Choose On to customize this path.</div> : null}
+      {authorizationMode === "on" ? <AuthorizationFields authorization={authorization} inherited={inheritedAuthorization} onChange={(key, value) => setAuthorization(routeIndex, pathIndex, key, value)} /> : null}
     </Stack></Accordion.Panel></Accordion.Item></Accordion>
   </div>;
 }
 
-type TextFieldProps = { label: string; value: string; onChange: (value: string) => void; hint?: string; className?: string };
+type AuthorizationFieldsProps = { authorization: Table; inherited?: Table; onChange: (key: string, value: unknown) => void };
+function AuthorizationFields({ authorization, inherited = {}, onChange }: AuthorizationFieldsProps) {
+  const hasParent = Object.keys(inherited).length > 0;
+  const resolved = { ...inherited, ...authorization };
+  const bearerEnabled = resolved.bearer === undefined ? true : bool(resolved.bearer);
+  const oidcEnabled = resolved.oidc === undefined ? Boolean(text(resolved.oidc_client_id)) : bool(resolved.oidc);
+  const booleanField = (label: string, key: string, effective: boolean) => hasParent
+    ? <InheritanceControl label={label} value={authorization[key] === undefined ? "inherit" : bool(authorization[key]) ? "on" : "off"} inherited={effective ? "On" : "Off"} onChange={(mode) => { if (mode === "inherit") onChange(key, undefined); else onChange(key, mode === "on"); }} />
+    : <CheckboxField label={label} checked={effective} onChange={(value) => onChange(key, value)} />;
+  const inheritedText = (key: string, fallback = "") => text(inherited[key]) || fallback;
+  const inheritedList = (key: string, fallback = "") => list(inherited[key]) || fallback;
+
+  return <div className="authorization-config">
+    <div className="authorization-methods">{booleanField("Bearer tokens", "bearer", bearerEnabled)}{booleanField("Browser OIDC", "oidc", oidcEnabled)}</div>
+    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+      <LinkField className="field-span-full" label="Issuer" value={text(authorization.issuer)} placeholder={inheritedText("issuer")} onChange={(value) => onChange("issuer", value)} />
+      {bearerEnabled ? <TextField label="Audiences" value={list(authorization.audiences)} placeholder={inheritedList("audiences")} onChange={(value) => onChange("audiences", splitList(value))} hint="Comma separated" /> : null}
+      <TextField label="Required roles" value={list(authorization.required_roles)} placeholder={inheritedList("required_roles")} onChange={(value) => onChange("required_roles", splitList(value))} hint="Comma separated" />
+      <TextField label="Roles claim" value={text(authorization.roles_claim)} placeholder={inheritedText("roles_claim", "groups")} onChange={(value) => onChange("roles_claim", value)} />
+      <SelectField label="Role matching" value={text(resolved.role_match) || "any"} options={["any", "all"]} onChange={(value) => onChange("role_match", value)} />
+      {bearerEnabled ? <LinkField className="field-span-full" label="JWKS URL" value={text(authorization.jwks_uri)} placeholder={inheritedText("jwks_uri")} onChange={(value) => onChange("jwks_uri", value)} /> : null}
+      {bearerEnabled ? <TextField className="field-span-full" label="JWKS cache file" value={text(authorization.jwks_cache_file)} placeholder={inheritedText("jwks_cache_file", "~/.cache/lfp-pipe/auth/jwks.json")} onChange={(value) => onChange("jwks_cache_file", value)} /> : null}
+      {oidcEnabled ? <TextField label="OIDC client ID" value={text(authorization.oidc_client_id)} placeholder={inheritedText("oidc_client_id")} onChange={(value) => onChange("oidc_client_id", value)} /> : null}
+      {oidcEnabled ? <TextField label="OIDC secret file" value={text(authorization.oidc_client_secret_file)} placeholder={inheritedText("oidc_client_secret_file")} onChange={(value) => onChange("oidc_client_secret_file", value)} /> : null}
+      {oidcEnabled ? <TextField className="field-span-full" label="OIDC scopes" value={list(authorization.oidc_scopes)} placeholder={inheritedList("oidc_scopes", "openid, profile, email, groups")} onChange={(value) => onChange("oidc_scopes", splitList(value))} hint="Comma separated" /> : null}
+      {oidcEnabled ? <TextField label="Callback path" value={text(authorization.oidc_callback_path)} placeholder={inheritedText("oidc_callback_path", "/_lfp/auth/callback")} onChange={(value) => onChange("oidc_callback_path", value)} /> : null}
+      {oidcEnabled ? <TextField label="Logout path" value={text(authorization.oidc_logout_path)} placeholder={inheritedText("oidc_logout_path", "/_lfp/auth/logout")} onChange={(value) => onChange("oidc_logout_path", value)} /> : null}
+      {oidcEnabled ? <TextField label="Session key file" value={text(authorization.oidc_session_key_file)} placeholder={inheritedText("oidc_session_key_file", "~/.secrets/lfp-pipe/oidc-session-key")} onChange={(value) => onChange("oidc_session_key_file", value)} /> : null}
+      {oidcEnabled ? <NumberField label="Session lifetime" suffix=" s" value={number(authorization.oidc_session_ttl_seconds, number(inherited.oidc_session_ttl_seconds, 28800))} onChange={(value) => onChange("oidc_session_ttl_seconds", value)} /> : null}
+    </SimpleGrid>
+    {bearerEnabled ? booleanField("Forward Authorization header", "forward_authorization", bool(resolved.forward_authorization)) : null}
+  </div>;
+}
+
+function InheritanceControl({ label, value, inherited, onChange }: { label: string; value: string; inherited: string; onChange: (value: string) => void }) {
+  return <div className="inheritance-field"><span className="inheritance-label">{label}</span><SegmentedControl className="inheritance-control" size="xs" value={value} data={[{ value: "inherit", label: "Inherit" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={onChange} /><span className="inheritance-value">{value === "inherit" ? `Inherited: ${inherited}` : "Explicit override"}</span></div>;
+}
+
+type TextFieldProps = { label: string; value: string; onChange: (value: string) => void; hint?: string; className?: string; placeholder?: string };
 function TextField({ onChange, hint, label, ...props }: TextFieldProps) { return <TextInput {...props} label={label} name={label.toLowerCase().replace(/[^a-z0-9]+/g, "-")} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" description={hint} size="xs" onChange={(event) => onChange(event.currentTarget.value)} />; }
+function LinkField({ label, value, onChange, hint, className, placeholder, defaultScheme = "", multiple = false }: TextFieldProps & { defaultScheme?: string; multiple?: boolean }) {
+  const [editing, setEditing] = useState(!value);
+  const values = multiple ? splitList(value) : [value.trim()];
+  const links = values.map((item) => ({ label: item, href: linkHref(item, defaultScheme) })).filter((item) => item.href);
+
+  if (editing || !value) {
+    return <div className={`editable-link-field${className ? ` ${className}` : ""}`}>
+      <div className="editable-link-editor"><TextField label={label} value={value} placeholder={placeholder} onChange={onChange} hint={hint} /><ActionIcon type="button" variant="default" title={`Finish editing ${label}`} aria-label={`Finish editing ${label}`} disabled={!value.trim()} onClick={() => setEditing(false)}><Check size={15} aria-hidden="true" /></ActionIcon></div>
+    </div>;
+  }
+
+  return <div className={`editable-link-field${className ? ` ${className}` : ""}`}>
+    <span className="editable-link-label">{label}</span>
+    <div className="editable-link-row"><div className="editable-link-values">{links.map((item) => <a key={item.href} href={item.href} target="_blank" rel="noreferrer noopener"><span>{item.label}</span><ExternalLink size={12} aria-hidden="true" /></a>)}</div><button className="link-edit-button" type="button" onClick={() => setEditing(true)}><Pencil size={12} aria-hidden="true" />Edit</button></div>
+    {hint ? <span className="editable-link-hint">{hint}</span> : null}
+  </div>;
+}
 function NumberField({ label, value, suffix, onChange }: { label: string; value: number; suffix?: string; onChange: (value: number) => void }) { return <NumberInput label={label} value={value} suffix={suffix} size="xs" min={0} onChange={(next) => onChange(Number(next) || 0)} />; }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <Select label={label} value={value} data={options} size="xs" allowDeselect={false} onChange={(next) => next !== null && onChange(next)} />; }
 function CheckboxField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {

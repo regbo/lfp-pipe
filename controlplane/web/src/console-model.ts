@@ -108,23 +108,27 @@ export function configRoutes(principal: ServicePrincipal, toml: string): RouteSu
     const document = object(parse(toml));
     const defaults = object(document.defaults);
     const defaultAcme = object(defaults.acme);
+    const defaultAuthorization = object(defaults.authorization);
     const defaultTls = Object.keys(defaultAcme).length > 0 && defaultAcme.enabled !== false;
     return list(document.routes).map((value) => {
       const route = object(value);
       const routeAcme = object(route.acme);
+      const routeAuthorization = object(route.authorization);
+      const inheritedAuthorization = Object.keys(routeAuthorization).length > 0 ? routeAuthorization : defaultAuthorization;
       const tls = routeAcme.enabled === undefined ? defaultTls : routeAcme.enabled !== false;
       const paths = list(route.path_routes).map((pathValue) => {
         const path = object(pathValue);
         const authorization = object(path.authorization);
-        const protectedPath = Object.keys(authorization).length > 0 && authorization.enabled !== false;
+        const resolvedAuthorization = { ...inheritedAuthorization, ...authorization };
+        const protectedPath = (Object.keys(inheritedAuthorization).length > 0 || Object.keys(authorization).length > 0) && resolvedAuthorization.enabled !== false;
         return {
           path: string(path.path_prefix) || "/",
           backend: string(path.backend_addr) || string(route.http_backend_addr) || string(defaults.http_backend_addr),
           protected: protectedPath,
           methods: protectedPath
-            ? [authorization.bearer === false ? "" : "Bearer", authorization.oidc ? "OIDC" : ""].filter(Boolean)
+            ? [resolvedAuthorization.bearer === false ? "" : "Bearer", resolvedAuthorization.oidc ? "OIDC" : ""].filter(Boolean)
             : [],
-          roles: strings(authorization.required_roles),
+          roles: strings(resolvedAuthorization.required_roles),
         };
       });
       return {
