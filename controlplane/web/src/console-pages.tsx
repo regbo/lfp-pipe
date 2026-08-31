@@ -187,12 +187,11 @@ export function KeysPage({ principals, loading, error, selected, onToggle, onCre
   </>;
 }
 
-export function SettingsPage({ identity, entitlements, onMachines }: { identity: Identity; entitlements: string[]; onMachines: () => void }) {
+export function SettingsPage({ identity, entitlements }: { identity: Identity; entitlements: string[] }) {
   return <>
     <PageHeader title="Settings" description="Network identity and registration boundaries for this control plane." />
     <section className="settings-section"><div className="settings-heading"><h2>Pipe domain</h2><p>The public suffix used to register routes and issue client credentials.</p></div><dl className="definition-grid"><dt>Domain suffix</dt><dd><code>{identity.required_entitlement}</code></dd><dt>Route pattern</dt><dd><code>{identity.route_pattern}</code></dd><dt>Control plane</dt><dd><a className="external-text-link" href={linkHref(identity.control_plane_url)} target="_blank" rel="noreferrer noopener"><code>{identity.control_plane_url}</code><ExternalLink size={12} aria-hidden="true" /></a></dd></dl></section>
     <section className="settings-section"><div className="settings-heading"><h2>Authorized domains</h2><p>Domains granted by your identity provider.</p></div><div className="domain-list">{entitlements.map((entitlement) => <code key={entitlement}>{entitlement}</code>)}</div></section>
-    <section className="settings-section"><div className="settings-heading"><h2>Client configuration</h2><p>Transport, identity, certificates, backends, path routing, and authorization are configured per machine.</p></div><Button variant="default" onClick={onMachines}>Manage machines</Button></section>
   </>;
 }
 

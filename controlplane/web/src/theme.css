@@ -24,7 +24,7 @@
   --radius-sm: 0.4rem;
   --radius-md: 0.6rem;
   --radius-lg: 0.8rem;
-  --motion-pulse-duration: 2200ms;
+  --motion-pulse-duration: 2800ms;
   --motion-ease-soft: cubic-bezier(0.45, 0, 0.55, 1);
   --sidebar-width: 238px;
 }

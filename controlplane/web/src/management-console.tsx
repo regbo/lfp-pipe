@@ -471,14 +471,14 @@ http_backend_addr = ":80"
     </aside>
     <div className="mobile-header"><button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}><MenuIcon size={20} /></button><Brand settings={brand} /></div>
 
-    <main className="console-main" id="main-content">
+    <main className={`console-main${editingPrincipal ? " configuration-main" : ""}`} id="main-content">
       {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /></MachineDetail> : null}
       {!editingPrincipal && activePage === "machines" && selectedClient ? <MachineDetail client={selectedClient} principal={principalByUsername.get(selectedClient.username)} identity={identity} loading={false} dirty={false} saving={false} onBack={() => setSelectedMachine("")} onSave={() => undefined} onExport={() => undefined} onDelete={setDeleteCandidate} /> : null}
       {!editingPrincipal && activePage === "machines" && !selectedClient ? <MachinesPage clients={managedClients} enrollments={enrollments} principals={principalByUsername} routes={routesByUsername} loading={devicesLoading} error={devicesError} search={machineSearch} filter={machineFilter} selected={selectedPrincipals} onSearch={setMachineSearch} onFilter={setMachineFilter} onOpen={openMachine} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onApprove={(enrollment) => void claimEnrollment(enrollment)} onToggle={togglePrincipal} onCreate={openCreation} onExport={() => void downloadSelectedConfigs()} /> : null}
       {!editingPrincipal && activePage === "routes" ? <RoutesPage routes={routes} search={routeSearch} onSearch={setRouteSearch} onEdit={(principal) => void editConfig(principal)} onAdd={() => setRouteMachineOpen(true)} /> : null}
       {!editingPrincipal && activePage === "access" ? <AccessPage routes={routes} onEdit={(principal) => void editConfig(principal)} /> : null}
       {!editingPrincipal && activePage === "keys" ? <KeysPage principals={automationPrincipals} loading={principalsLoading} error={principalsError} selected={selectedPrincipals} onToggle={togglePrincipal} onCreate={openCreation} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onExport={() => void downloadSelectedConfigs()} /> : null}
-      {!editingPrincipal && activePage === "settings" ? <SettingsPage identity={identity} entitlements={effectiveEntitlements} onMachines={() => navigate("machines")} /> : null}
+      {!editingPrincipal && activePage === "settings" ? <SettingsPage identity={identity} entitlements={effectiveEntitlements} /> : null}
       {error ? <p className="global-error" role="alert">{error}</p> : null}
     </main>
 

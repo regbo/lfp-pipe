@@ -91,8 +91,8 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .loading-row { min-height: 130px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--color-muted); }
 .loading-pulse { width: 8px; height: 8px; flex: none; background: var(--color-brand); border-radius: 50%; animation: soft-pulse var(--motion-pulse-duration) var(--motion-ease-soft) infinite; }
 @keyframes soft-pulse {
-  0%, 100% { opacity: 0.34; transform: scale(0.82); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-brand) 22%, transparent); }
-  50% { opacity: 0.9; transform: scale(1); box-shadow: 0 0 0 6px transparent; }
+  0%, 100% { opacity: 0.48; transform: scale(0.9); }
+  50% { opacity: 0.84; transform: scale(1); }
 }
 .inline-error { margin: 14px 0; padding: 10px 12px; color: var(--color-danger); background: var(--error-background); border-radius: var(--radius-sm); }
 .global-error { position: fixed; z-index: 80; right: 20px; bottom: 20px; max-width: min(420px, calc(100vw - 40px)); margin: 0; padding: 12px 15px; color: var(--color-danger); background: var(--error-background); border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent); border-radius: var(--radius-md); box-shadow: var(--shadow-popover); }
@@ -142,6 +142,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .machine-facts > div > span:first-child { color: var(--color-muted); font-size: 10px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
 .machine-facts code { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .configuration-page { max-width: 1120px; min-height: 240px; padding-bottom: 72px; }
+.console-main.configuration-main { padding-bottom: 0; }
 .structured-config { display: grid; }
 .config-root-section { padding: 24px 0 28px; display: grid; gap: 16px; }
 .config-root-section + .config-root-section { border-top: 1px solid var(--color-line-strong); }
@@ -176,7 +177,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .editable-link-editor { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: end; gap: 6px; }
 .editable-link-editor > .mantine-ActionIcon-root { margin-bottom: 1px; }
 .route-list { display: grid; border-top: 1px solid var(--color-line); }
-.route-config { position: relative; display: grid; border-bottom: 1px solid var(--color-line); }
+.route-config { position: relative; display: grid; border-bottom: 1px solid var(--color-line); scroll-margin-block: 32px; }
 .route-config::before { content: ""; position: absolute; top: 48px; bottom: 17px; left: 15px; width: 1px; background: var(--color-line-strong); }
 .route-header { padding: 13px 4px; display: grid; grid-template-columns: 25px minmax(0, 1fr) 32px; gap: 10px; align-items: end; }
 .route-node { z-index: 1; width: 25px; height: 25px; margin-bottom: 3px; display: grid; place-items: center; color: var(--color-brand-ink); background: var(--color-brand); border-radius: 7px; }
@@ -184,7 +185,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .route-transport-options { display: flex; align-items: flex-end; gap: 14px; color: var(--color-muted); font-size: 11px; }
 .path-list-heading, .path-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .path-list { display: grid; border-top: 1px solid var(--color-line); }
-.path-config { padding: 12px 0; display: grid; gap: 9px; border-bottom: 1px solid var(--color-line); }
+.path-config { padding: 12px 0; display: grid; gap: 9px; border-bottom: 1px solid var(--color-line); scroll-margin-block: 72px; }
 .path-fields { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(150px, 1fr) auto; gap: 9px; align-items: start; }
 .path-fields > .checkbox-field { margin-top: 17px; }
 .checkbox-field { position: relative; min-width: 0; min-height: 30px; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text); font-size: 11px; cursor: pointer; }
@@ -277,6 +278,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-  .loading-pulse { opacity: 0.65; transform: none; box-shadow: none; }
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .loading-pulse { animation: none !important; opacity: 0.65; transform: none; }
 }
