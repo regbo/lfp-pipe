@@ -927,7 +927,14 @@ pub fn parse_client_config_document(raw: &str) -> anyhow::Result<Vec<ClientConfi
 fn parse_client_configs(raw: &str) -> anyhow::Result<Vec<ClientConfig>> {
     let document: ClientConfigDocument = toml::from_str(raw)?;
     let configs = match document {
-        ClientConfigDocument::Legacy(config) => vec![config],
+        ClientConfigDocument::Legacy(mut config) => {
+            for rule in &mut config.backend_rules {
+                if rule.path_prefix.is_some() && rule.authorization.is_none() {
+                    rule.authorization.clone_from(&config.authorization);
+                }
+            }
+            vec![config]
+        }
         ClientConfigDocument::MultiRoute(config) => {
             expand_client_routes(config).context("invalid multi-route client config")?
         }
@@ -1181,19 +1188,38 @@ fn merge_authorization_defaults(
     if !enabled {
         return Ok(None);
     }
-    let string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>, name: &str| {
+    let non_blank_string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>| {
         route
             .and_then(|settings| select(settings).clone())
-            .or_else(|| defaults.and_then(|settings| select(settings).clone()))
-            .with_context(|| {
-                format!("authorization.{name} is required in the route or [defaults.authorization]")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                defaults
+                    .and_then(|settings| select(settings).clone())
+                    .filter(|value| !value.trim().is_empty())
             })
+    };
+    let required_string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>,
+                                 name: &str| {
+        non_blank_string_value(select).with_context(|| {
+            format!("authorization.{name} is required in the route or [defaults.authorization]")
+        })
     };
     let list_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<Vec<String>>| {
         route
             .and_then(|settings| select(settings).clone())
             .or_else(|| defaults.and_then(|settings| select(settings).clone()))
     };
+    let non_empty_list_value =
+        |select: fn(&ClientAuthorizationDefaults) -> &Option<Vec<String>>| {
+            route
+                .and_then(|settings| select(settings).clone())
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    defaults
+                        .and_then(|settings| select(settings).clone())
+                        .filter(|value| !value.is_empty())
+                })
+        };
 
     Ok(Some(ClientAuthorizationConfig {
         bearer: route
@@ -1202,18 +1228,14 @@ fn merge_authorization_defaults(
         oidc: route
             .and_then(|settings| settings.oidc)
             .or_else(|| defaults.and_then(|settings| settings.oidc)),
-        issuer: string_value(|settings| &settings.issuer, "issuer")?,
-        audiences: list_value(|settings| &settings.audiences).unwrap_or_default(),
+        issuer: required_string_value(|settings| &settings.issuer, "issuer")?,
+        audiences: non_empty_list_value(|settings| &settings.audiences).unwrap_or_default(),
         jwks_uri: route
             .and_then(|settings| settings.jwks_uri.clone())
             .or_else(|| defaults.and_then(|settings| settings.jwks_uri.clone())),
-        jwks_cache_file: route
-            .and_then(|settings| settings.jwks_cache_file.clone())
-            .or_else(|| defaults.and_then(|settings| settings.jwks_cache_file.clone()))
+        jwks_cache_file: non_blank_string_value(|settings| &settings.jwks_cache_file)
             .unwrap_or_else(default_jwks_cache_file),
-        roles_claim: route
-            .and_then(|settings| settings.roles_claim.clone())
-            .or_else(|| defaults.and_then(|settings| settings.roles_claim.clone()))
+        roles_claim: non_blank_string_value(|settings| &settings.roles_claim)
             .unwrap_or_else(default_roles_claim),
         required_roles: list_value(|settings| &settings.required_roles).unwrap_or_default(),
         forward_authorization: route
@@ -1224,7 +1246,7 @@ fn merge_authorization_defaults(
             .and_then(|settings| settings.role_match)
             .or_else(|| defaults.and_then(|settings| settings.role_match))
             .unwrap_or_default(),
-        algorithms: list_value(|settings| &settings.algorithms)
+        algorithms: non_empty_list_value(|settings| &settings.algorithms)
             .unwrap_or_else(default_jwt_algorithms),
         leeway_seconds: route
             .and_then(|settings| settings.leeway_seconds)
@@ -1246,25 +1268,19 @@ fn merge_authorization_defaults(
             .and_then(|settings| settings.max_header_bytes)
             .or_else(|| defaults.and_then(|settings| settings.max_header_bytes))
             .unwrap_or_else(default_auth_max_header_bytes),
-        oidc_client_id: route
-            .and_then(|settings| settings.oidc_client_id.clone())
-            .or_else(|| defaults.and_then(|settings| settings.oidc_client_id.clone())),
+        oidc_client_id: non_blank_string_value(|settings| &settings.oidc_client_id),
+        // An explicit empty secret file is meaningful: it turns a path inherited
+        // from a confidential client into a public PKCE client.
         oidc_client_secret_file: route
             .and_then(|settings| settings.oidc_client_secret_file.clone())
             .or_else(|| defaults.and_then(|settings| settings.oidc_client_secret_file.clone())),
-        oidc_scopes: list_value(|settings| &settings.oidc_scopes)
+        oidc_scopes: non_empty_list_value(|settings| &settings.oidc_scopes)
             .unwrap_or_else(default_browser_oidc_scopes),
-        oidc_callback_path: route
-            .and_then(|settings| settings.oidc_callback_path.clone())
-            .or_else(|| defaults.and_then(|settings| settings.oidc_callback_path.clone()))
+        oidc_callback_path: non_blank_string_value(|settings| &settings.oidc_callback_path)
             .unwrap_or_else(default_oidc_callback_path),
-        oidc_logout_path: route
-            .and_then(|settings| settings.oidc_logout_path.clone())
-            .or_else(|| defaults.and_then(|settings| settings.oidc_logout_path.clone()))
+        oidc_logout_path: non_blank_string_value(|settings| &settings.oidc_logout_path)
             .unwrap_or_else(default_oidc_logout_path),
-        oidc_session_key_file: route
-            .and_then(|settings| settings.oidc_session_key_file.clone())
-            .or_else(|| defaults.and_then(|settings| settings.oidc_session_key_file.clone()))
+        oidc_session_key_file: non_blank_string_value(|settings| &settings.oidc_session_key_file)
             .unwrap_or_else(default_oidc_session_key_file),
         oidc_session_ttl_seconds: route
             .and_then(|settings| settings.oidc_session_ttl_seconds)
@@ -1786,6 +1802,99 @@ mod tests {
         let authorization = configs[0].authorization.as_ref().expect("authorization");
         assert!(authorization.oidc_enabled());
         assert!(authorization.oidc_client_secret_file.is_none());
+    }
+
+    #[test]
+    fn blank_path_fields_inherit_the_route_authorization_policy() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "inherited-path"
+                hostname = "protected.example.com"
+
+                [routes.authorization]
+                bearer = true
+                oidc = true
+                issuer = "https://auth.example/application/o/root/"
+                audiences = ["root-api"]
+                oidc_client_id = "root-browser"
+                oidc_client_secret_file = "/run/secrets/root-browser"
+
+                [[routes.path_routes]]
+                path_prefix = "/whoami"
+                backend_addr = ":9999"
+
+                [routes.path_routes.authorization]
+                oidc = true
+                issuer = ""
+                audiences = []
+                oidc_client_id = ""
+                oidc_client_secret_file = ""
+                oidc_scopes = []
+            "#,
+        )
+        .expect("blank path fields inherit required parent values");
+
+        let authorization = configs[0].backend_rules[1]
+            .authorization
+            .as_ref()
+            .expect("path authorization");
+        assert_eq!(
+            authorization.issuer,
+            "https://auth.example/application/o/root/"
+        );
+        assert_eq!(authorization.audiences, ["root-api"]);
+        assert_eq!(
+            authorization.oidc_client_id.as_deref(),
+            Some("root-browser")
+        );
+        assert_eq!(authorization.oidc_client_secret_file.as_deref(), Some(""));
+        assert!(
+            authorization
+                .oidc_scopes
+                .iter()
+                .any(|scope| scope == "openid")
+        );
+    }
+
+    #[test]
+    fn path_can_disable_the_inherited_route_authorization_policy() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "public-path"
+                hostname = "protected.example.com"
+
+                [routes.authorization]
+                issuer = "https://auth.example/application/o/root/"
+                audiences = ["root-api"]
+
+                [[routes.path_routes]]
+                path_prefix = "/public"
+                backend_addr = ":9999"
+
+                [routes.path_routes.authorization]
+                enabled = false
+            "#,
+        )
+        .expect("explicit public path");
+
+        assert!(configs[0].authorization.is_some());
+        assert!(configs[0].backend_rules[1].authorization.is_none());
     }
 
     #[test]

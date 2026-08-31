@@ -219,10 +219,13 @@ async fn process_messages(
     let mut authorizers: Vec<(ClientAuthorizationConfig, authorization::Authorizer)> = Vec::new();
     let authorization_hostname = config.acme.as_ref().map(|settings| settings.domain.clone());
     for rule in config.backend_rules.iter().cloned() {
-        let policy = rule
-            .authorization
-            .clone()
-            .or_else(|| config.authorization.clone());
+        let policy = if rule.path_prefix.is_some() {
+            rule.authorization.clone()
+        } else {
+            rule.authorization
+                .clone()
+                .or_else(|| config.authorization.clone())
+        };
         let authorization = if let Some(policy) = policy {
             if let Some((_, existing)) =
                 authorizers.iter().find(|(existing, _)| *existing == policy)

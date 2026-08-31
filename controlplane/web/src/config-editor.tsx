@@ -16,6 +16,8 @@ const number = (value: unknown, fallback: number) => typeof value === "number" ?
 const bool = (value: unknown, fallback = false) => typeof value === "boolean" ? value : fallback;
 const list = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
 const splitList = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+const blankTextInherits = new Set(["issuer", "jwks_cache_file", "roles_claim", "oidc_client_id", "oidc_callback_path", "oidc_logout_path", "oidc_session_key_file"]);
+const emptyListInherits = new Set(["audiences", "algorithms", "oidc_scopes"]);
 function childTable(parent: Table, key: string): Table { const existing = asTable(parent[key]); parent[key] = existing; return existing; }
 function revealEditor(selector: string) {
   requestAnimationFrame(() => {
@@ -121,7 +123,11 @@ export function ConfigEditor({ toml, onChange, provisioning, identityGroups = []
   const setAuthorization = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => {
     const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
     const policy = childTable(target, "authorization");
-    if (value === undefined) delete policy[key];
+    const inheritsBlankText = blankTextInherits.has(key)
+      && typeof value === "string" && !value.trim();
+    const inheritsEmptyList = emptyListInherits.has(key)
+      && Array.isArray(value) && value.length === 0;
+    if (value === undefined || inheritsBlankText || inheritsEmptyList) delete policy[key];
     else policy[key] = value;
     if (Object.keys(policy).length === 0) delete target.authorization;
   });
