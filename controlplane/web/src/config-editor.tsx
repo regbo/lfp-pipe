@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Check, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
 import { Accordion, ActionIcon, Button, Group, NumberInput, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
 
@@ -155,7 +155,7 @@ function RouteEditor({ route, routeIndex, defaultTlsTermination, setRoute, setOp
   const tlsTermination = routeAcme.enabled === undefined ? defaultTlsTermination : bool(routeAcme.enabled);
   const routeName = text(route.hostname) || `Route ${routeIndex + 1}`;
   return <article className="route-config">
-    <div className="route-header"><div className="route-number" aria-hidden="true">{routeIndex + 1}</div><TextField className="route-hostname" label="Public hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
+    <div className="route-header"><div className="route-node" aria-hidden="true"><RouteIcon size={15} /></div><TextField className="route-hostname" label="Public hostname" value={text(route.hostname)} onChange={(value) => setRoute(routeIndex, "hostname", value)} /><ActionIcon type="button" color="red" variant="subtle" title={`Remove ${routeName}`} aria-label={`Remove ${routeName}`} onClick={() => update((draft) => { asRoutes(draft.routes).splice(routeIndex, 1); })}><Trash2 size={16} aria-hidden="true" /></ActionIcon></div>
     <div className="route-body">
       <SimpleGrid className="route-backends" cols={{ base: 1, sm: 3 }} spacing="sm">
         <TextField label="Host backend" value={text(route.backend_addr)} onChange={(value) => setOptionalRoute(routeIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" />

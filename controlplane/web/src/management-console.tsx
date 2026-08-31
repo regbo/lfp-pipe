@@ -109,6 +109,7 @@ export function ManagementConsole() {
   const [savedConfig, setSavedConfig] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
   const [discardConfigOpen, setDiscardConfigOpen] = useState(false);
+  const [pendingPage, setPendingPage] = useState<ConsolePage | null>(null);
   const [routeMachine, setRouteMachine] = useState("");
   const [routeMachineOpen, setRouteMachineOpen] = useState(false);
 
@@ -143,6 +144,16 @@ export function ManagementConsole() {
       .filter((value) => requestedHostname === value || requestedHostname.endsWith(`.${value}`))
       .sort((left, right) => right.length - left.length)[0] ?? "";
   }, [effectiveEntitlements, requestedHostname]);
+
+  useEffect(() => {
+    if (!configDirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [configDirty]);
 
   async function loadConfigCatalog(items: ServicePrincipal[]) {
     const results = await Promise.allSettled(items.map(async (principal) => ({
@@ -223,6 +234,13 @@ export function ManagementConsole() {
   }, []);
 
   function navigate(page: ConsolePage) {
+    if (editingPrincipal && configSaving) return;
+    if (editingPrincipal && configDirty) {
+      setPendingPage(page);
+      setDiscardConfigOpen(true);
+      return;
+    }
+    setEditingPrincipal(null);
     setActivePage(page);
     setSelectedMachine("");
     setSidebarOpen(false);
@@ -231,12 +249,15 @@ export function ManagementConsole() {
   async function editConfig(principal: ServicePrincipal) {
     setError("");
     setLoadingConfigFor(principal.username);
+    setSelectedMachine(principal.username);
+    setEditingPrincipal(principal);
+    setCentralConfig("");
+    setSavedConfig("");
     try {
       const known = configDocuments[principal.id];
       const config = known ?? (await api<{ config_toml: string }>(`/api/service-principals/${principal.id}/config`)).config_toml;
       setCentralConfig(config);
       setSavedConfig(config);
-      setEditingPrincipal(principal);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Configuration could not be loaded.");
     } finally {
@@ -265,17 +286,28 @@ export function ManagementConsole() {
 
   function requestCloseConfig() {
     if (configSaving) return;
+    setPendingPage(null);
     if (configDirty) {
       setDiscardConfigOpen(true);
       return;
     }
     setEditingPrincipal(null);
+    setSelectedMachine("");
   }
 
   function discardConfigChanges() {
     setCentralConfig(savedConfig);
     setDiscardConfigOpen(false);
     setEditingPrincipal(null);
+    setSelectedMachine("");
+    if (pendingPage) setActivePage(pendingPage);
+    setPendingPage(null);
+    setSidebarOpen(false);
+  }
+
+  function keepEditingConfig() {
+    setPendingPage(null);
+    setDiscardConfigOpen(false);
   }
 
   async function createPrincipal(event: React.FormEvent) {
@@ -342,6 +374,7 @@ export function ManagementConsole() {
       await api<void>(`/api/service-principals/${deleteCandidate.id}`, { method: "DELETE" });
       setSelectedPrincipals((current) => current.filter((id) => id !== deleteCandidate.id));
       if (selectedMachine === deleteCandidate.username) setSelectedMachine("");
+      if (editingPrincipal?.id === deleteCandidate.id) setEditingPrincipal(null);
       setDeleteCandidate(null);
       await Promise.all([loadPrincipals(), loadDevices()]);
     } catch (cause) {
@@ -416,6 +449,8 @@ http_backend_addr = ":80"
   const openMachine = (username: string) => {
     setSelectedMachine(username);
     setActivePage("machines");
+    const principal = principalByUsername.get(username);
+    if (principal) void editConfig(principal);
   };
 
   return <div className="console-shell">
@@ -437,19 +472,17 @@ http_backend_addr = ":80"
     <div className="mobile-header"><button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}><MenuIcon size={20} /></button><Brand settings={brand} /></div>
 
     <main className="console-main" id="main-content">
-      {activePage === "machines" && selectedClient ? <MachineDetail client={selectedClient} principal={principalByUsername.get(selectedClient.username)} routes={routesByUsername.get(selectedClient.username) ?? []} identity={identity} loading={loadingConfigFor === selectedClient.username} onBack={() => setSelectedMachine("")} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} /> : null}
-      {activePage === "machines" && !selectedClient ? <MachinesPage clients={managedClients} enrollments={enrollments} principals={principalByUsername} routes={routesByUsername} loading={devicesLoading} error={devicesError} search={machineSearch} filter={machineFilter} selected={selectedPrincipals} onSearch={setMachineSearch} onFilter={setMachineFilter} onOpen={openMachine} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onApprove={(enrollment) => void claimEnrollment(enrollment)} onToggle={togglePrincipal} onCreate={openCreation} onExport={() => void downloadSelectedConfigs()} /> : null}
-      {activePage === "routes" ? <RoutesPage routes={routes} search={routeSearch} onSearch={setRouteSearch} onEdit={(principal) => void editConfig(principal)} onAdd={() => setRouteMachineOpen(true)} /> : null}
-      {activePage === "access" ? <AccessPage routes={routes} onEdit={(principal) => void editConfig(principal)} /> : null}
-      {activePage === "keys" ? <KeysPage principals={automationPrincipals} loading={principalsLoading} error={principalsError} selected={selectedPrincipals} onToggle={togglePrincipal} onCreate={openCreation} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onExport={() => void downloadSelectedConfigs()} /> : null}
-      {activePage === "settings" ? <SettingsPage identity={identity} entitlements={effectiveEntitlements} onMachines={() => navigate("machines")} /> : null}
+      {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /></MachineDetail> : null}
+      {!editingPrincipal && activePage === "machines" && selectedClient ? <MachineDetail client={selectedClient} principal={principalByUsername.get(selectedClient.username)} identity={identity} loading={false} dirty={false} saving={false} onBack={() => setSelectedMachine("")} onSave={() => undefined} onExport={() => undefined} onDelete={setDeleteCandidate} /> : null}
+      {!editingPrincipal && activePage === "machines" && !selectedClient ? <MachinesPage clients={managedClients} enrollments={enrollments} principals={principalByUsername} routes={routesByUsername} loading={devicesLoading} error={devicesError} search={machineSearch} filter={machineFilter} selected={selectedPrincipals} onSearch={setMachineSearch} onFilter={setMachineFilter} onOpen={openMachine} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onApprove={(enrollment) => void claimEnrollment(enrollment)} onToggle={togglePrincipal} onCreate={openCreation} onExport={() => void downloadSelectedConfigs()} /> : null}
+      {!editingPrincipal && activePage === "routes" ? <RoutesPage routes={routes} search={routeSearch} onSearch={setRouteSearch} onEdit={(principal) => void editConfig(principal)} onAdd={() => setRouteMachineOpen(true)} /> : null}
+      {!editingPrincipal && activePage === "access" ? <AccessPage routes={routes} onEdit={(principal) => void editConfig(principal)} /> : null}
+      {!editingPrincipal && activePage === "keys" ? <KeysPage principals={automationPrincipals} loading={principalsLoading} error={principalsError} selected={selectedPrincipals} onToggle={togglePrincipal} onCreate={openCreation} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onExport={() => void downloadSelectedConfigs()} /> : null}
+      {!editingPrincipal && activePage === "settings" ? <SettingsPage identity={identity} entitlements={effectiveEntitlements} onMachines={() => navigate("machines")} /> : null}
       {error ? <p className="global-error" role="alert">{error}</p> : null}
     </main>
 
-    <Modal opened={editingPrincipal !== null} onClose={requestCloseConfig} title={editingPrincipal ? `${editingPrincipal.name || editingPrincipal.client_id} configuration` : "Client configuration"} size="min(1120px, calc(100vw - 2rem))" centered closeButtonProps={{ disabled: configSaving, "aria-label": "Close configuration" }} classNames={{ content: "manage-config-content", body: "manage-config-body", header: "manage-config-header" }}>
-      {editingPrincipal ? <div className="manage-config-editor"><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /><div className="config-footer"><span className={`save-state${configDirty ? " is-dirty" : ""}`}><span />{configSaving ? "Saving…" : configDirty ? "Unsaved changes" : "Saved"}</span><div className="config-footer-actions"><Button variant="default" leftSection={<Download size={15} />} onClick={exportCurrentConfig}>Export</Button><Button variant="default" disabled={configSaving} onClick={requestCloseConfig}>Close</Button><Button loading={configSaving} disabled={!configDirty} onClick={() => void saveConfig()}>Save changes</Button></div></div></div> : null}
-    </Modal>
-    <Modal opened={discardConfigOpen} onClose={() => setDiscardConfigOpen(false)} title="Discard unsaved changes?" size="sm" centered><p className="modal-copy">This client configuration has changes that have not been saved.</p><Group justify="flex-end"><Button variant="default" onClick={() => setDiscardConfigOpen(false)}>Keep editing</Button><Button color="red" onClick={discardConfigChanges}>Discard changes</Button></Group></Modal>
+    <Modal opened={discardConfigOpen} onClose={keepEditingConfig} title="Discard unsaved changes?" size="sm" centered><p className="modal-copy">This client configuration has changes that have not been saved.</p><Group justify="flex-end"><Button variant="default" onClick={keepEditingConfig}>Keep editing</Button><Button color="red" onClick={discardConfigChanges}>Discard changes</Button></Group></Modal>
     <Modal opened={deleteCandidate !== null} onClose={() => setDeleteCandidate(null)} title={`Remove ${deleteCandidate?.name || deleteCandidate?.client_id || "client"}?`} size="sm" centered><p className="modal-copy">This revokes its credentials and removes its centrally managed configuration.</p><Group justify="flex-end"><Button variant="default" onClick={() => setDeleteCandidate(null)}>Cancel</Button><Button color="red" loading={deletingPrincipal} onClick={() => void deletePrincipal()}>Remove</Button></Group></Modal>
 
     <Modal opened={creationMode !== null} onClose={() => setCreationMode(null)} title={creationMode === "temporary" ? "Generate temporary key" : "Generate machine key"} size="md" centered>

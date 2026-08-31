@@ -111,20 +111,40 @@ export function MachinesPage(props: MachinesPageProps) {
   </>;
 }
 
-export function MachineDetail({ client, principal, routes, identity, loading, onBack, onEdit, onDelete }: { client: ManagedClient; principal?: ServicePrincipal; routes: RouteSummary[]; identity: Identity; loading: boolean; onBack: () => void; onEdit: (principal: ServicePrincipal) => void; onDelete: (principal: ServicePrincipal) => void }) {
+type MachineDetailProps = {
+  client?: ManagedClient;
+  principal?: ServicePrincipal;
+  identity: Identity;
+  loading: boolean;
+  dirty: boolean;
+  saving: boolean;
+  children?: ReactNode;
+  onBack: () => void;
+  onSave: () => void;
+  onExport: () => void;
+  onDelete: (principal: ServicePrincipal) => void;
+};
+
+export function MachineDetail({ client, principal, identity, loading, dirty, saving, children, onBack, onSave, onExport, onDelete }: MachineDetailProps) {
+  const title = client?.name || principal?.name || principal?.client_id || client?.username || "Machine";
+  const presence = !client?.presence_known ? "Checking connection" : client.online ? "Connected" : `Last seen ${lastSeen(client)}`;
+  const description = client
+    ? `${client.platform || "Unknown platform"} · ${client.version || "Unknown version"} · ${presence}`
+    : `Client configuration · ${principal?.entitlement || identity.required_entitlement}`;
   return <>
-    <div className="breadcrumbs"><button type="button" onClick={onBack}>All Machines</button><span>/</span><span>{client.name || client.username}</span></div>
-    <PageHeader title={client.name || client.username} description={`Managed by ${identity.email || identity.name}`} actions={principal ? <Menu position="bottom-end" width={220}><Menu.Target><Button variant="default" rightSection={<ChevronDown size={14} />}>Machine settings</Button></Menu.Target><Menu.Dropdown><Menu.Item leftSection={<Settings size={15} />} onClick={() => onEdit(principal)}>Edit configuration…</Menu.Item><Menu.Divider /><Menu.Item color="red" leftSection={<Trash2 size={15} />} onClick={() => onDelete(principal)}>Remove…</Menu.Item></Menu.Dropdown></Menu> : null} />
-    <section className="detail-section">
-      <div className="detail-heading"><div><h2>Public routes</h2><p>Hostnames and paths forwarded by this machine.</p></div>{principal ? <Button variant="default" loading={loading} onClick={() => onEdit(principal)}>Edit routes</Button> : null}</div>
-      {routes.length ? <div className="detail-list">{routes.map((route) => <div className="detail-route" key={route.hostname}><span className="route-glyph"><RouteIcon size={16} /></span><div><strong>{route.hostname}</strong><span>{route.backend || route.httpBackend || "Backend inherited"}</span></div><span>{route.tls ? "TLS terminated" : "TLS passthrough"}</span><span>{route.paths.length} {route.paths.length === 1 ? "path rule" : "path rules"}</span></div>)}</div> : <EmptyState title="No public routes" copy="Add a hostname to forward traffic through this machine." action={principal ? <Button variant="default" onClick={() => onEdit(principal)}>Add route</Button> : null} />}
+    <div className="breadcrumbs"><button type="button" onClick={onBack}>Back</button><span>/</span><span>{title}</span></div>
+    <PageHeader title={title} description={description} actions={principal ? <Menu position="bottom-end" width={210}><Menu.Target><Button variant="default" rightSection={<ChevronDown size={14} />}>More</Button></Menu.Target><Menu.Dropdown><Menu.Item leftSection={<Download size={15} />} onClick={onExport}>Export configuration</Menu.Item><Menu.Divider /><Menu.Item color="red" leftSection={<Trash2 size={15} />} onClick={() => onDelete(principal)}>Remove…</Menu.Item></Menu.Dropdown></Menu> : null} />
+    <div className="machine-facts" aria-label="Machine identity">
+      {client ? <div><span>Status</span><Status client={client} /></div> : null}
+      <div><span>Service username</span><code>{client?.username || principal?.username || "—"}</code></div>
+      <div><span>Client ID</span><code>{principal?.client_id || "—"}</code></div>
+      <div><span>Authorized domain</span><code>{principal?.entitlement || "—"}</code></div>
+    </div>
+    <section className="configuration-page" aria-label={`${title} configuration`}>
+      {loading ? <LoadingRow label="Loading configuration…" /> : children}
+      {!loading && !principal ? <EmptyState title="No managed configuration" copy="This connected machine is not linked to a service principal." /> : null}
     </section>
-    <section className="detail-section">
-      <div className="detail-heading"><div><h2>Machine details</h2><p>Identity and connection information reported by the client.</p></div></div>
-      <dl className="definition-grid">
-        <dt>Status</dt><dd><Status client={client} /></dd><dt>Machine name</dt><dd>{client.name || client.username}</dd><dt>Platform</dt><dd>{client.platform || "Unknown"}</dd><dt>Client version</dt><dd>{client.version || "Unknown"}</dd><dt>Last seen</dt><dd>{lastSeen(client)}</dd><dt>Service username</dt><dd><code>{client.username}</code></dd><dt>Client ID</dt><dd><code>{principal?.client_id || "—"}</code></dd><dt>Authorized domain</dt><dd><code>{principal?.entitlement || "—"}</code></dd><dt>Control plane</dt><dd><code>{identity.control_plane_url}</code></dd>
-      </dl>
-    </section>
+    {principal && !loading ? <div className="config-footer config-page-footer"><span className={`save-state${dirty ? " is-dirty" : ""}`} aria-live="polite"><span />{saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}</span><div className="config-footer-actions"><Button loading={saving} disabled={!dirty} onClick={onSave}>Save changes</Button></div></div> : null}
   </>;
 }
 
