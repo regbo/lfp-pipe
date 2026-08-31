@@ -231,6 +231,11 @@ bearer header is removed before forwarding by default; set
 
 Interactive OIDC reserves `/_lfp/auth/callback` and `/_lfp/auth/logout` by
 default. Register `https://<public-host>/_lfp/auth/callback` with the provider.
+OIDC client secrets are optional: confidential clients can reference a secret
+file, while public clients use the authorization-code flow with PKCE and omit
+`oidc_client_secret_file`. When optional identity provisioning is enabled, an
+identity administrator can create this public application and exact callback
+from the managed machine page.
 The client strips caller-supplied identity headers and, after successful login,
 sets `X-Forwarded-User`, `X-Forwarded-Email`, `X-Forwarded-Groups`, and matching
 `X-Auth-Request-*` headers for the private backend. It also emits Authentik's

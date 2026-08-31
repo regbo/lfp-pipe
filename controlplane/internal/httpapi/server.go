@@ -25,6 +25,7 @@ import (
 	"github.com/nats-io/nats.go"
 	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
 	"github.com/regbo/lfp-pipe/controlplane/internal/config"
+	"github.com/regbo/lfp-pipe/controlplane/internal/identity"
 	"github.com/regbo/lfp-pipe/controlplane/internal/routeauth"
 	"github.com/regbo/lfp-pipe/controlplane/internal/ticket"
 	"golang.org/x/oauth2"
@@ -46,6 +47,7 @@ type Server struct {
 	cookies      *securecookie.SecureCookie
 	tickets      *ticket.Signer
 	authentik    *authentikapi.Client
+	provisioner  identity.Service
 	nats         *nats.Conn
 	cookieSecure bool
 	devices      *deviceRegistry
@@ -176,6 +178,7 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, nc *nat
 	codec := securecookie.New(hashKey[:], blockKey[:])
 	codec.MaxAge(int((12 * time.Hour).Seconds()))
 
+	authentikClient := authentikapi.NewClient(cfg.AuthentikAPIURL, cfg.AuthentikAPIToken)
 	server := &Server{
 		cfg:    cfg,
 		logger: logger,
@@ -189,10 +192,16 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, nc *nat
 		verifier:     provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
 		cookies:      codec,
 		tickets:      tickets,
-		authentik:    authentikapi.NewClient(cfg.AuthentikAPIURL, cfg.AuthentikAPIToken),
+		authentik:    authentikClient,
 		nats:         nc,
 		cookieSecure: strings.EqualFold(mustURLScheme(cfg.PublicURL), "https"),
 		devices:      newDeviceRegistry(),
+	}
+	if cfg.IdentityProvisioner == "authentik" {
+		server.provisioner = authentikapi.NewProvisioner(
+			authentikClient, cfg.AuthentikApplicationSlug,
+			cfg.IdentityApplicationSlug, cfg.IdentityApplicationName,
+		)
 	}
 	if nc != nil {
 		subscription, subscribeErr := nc.Subscribe(devicePresenceSubject, func(message *nats.Msg) {
@@ -230,11 +239,14 @@ func (s *Server) Handler() http.Handler {
 	router.Get("/api/auth/callback", s.callback)
 	router.Post("/api/auth/logout", s.logout)
 	router.Get("/api/me", s.me)
+	router.Get("/api/identity-provisioning", s.identityProvisioningStatus)
+	router.Get("/api/identity-provisioning/groups", s.identityProvisioningGroups)
 	router.Post("/api/tunnel-tokens", s.issueTunnelToken)
 	router.Get("/api/service-principals", s.listServicePrincipals)
 	router.Post("/api/service-principals", s.createServicePrincipal)
 	router.Get("/api/service-principals/{id}/config", s.getServicePrincipalConfig)
 	router.Put("/api/service-principals/{id}/config", s.putServicePrincipalConfig)
+	router.Post("/api/service-principals/{id}/identity-applications", s.provisionIdentityApplication)
 	router.Delete("/api/service-principals/{id}", s.deleteServicePrincipal)
 	router.Get("/api/client-settings", s.getMachineClientSettings)
 	router.Get("/api/client-config", s.getMachineClientConfig)
@@ -246,6 +258,125 @@ func (s *Server) Handler() http.Handler {
 	router.Get("/api/enrollments", s.listEnrollments)
 	router.Post("/api/enrollments/{code}/claim", s.claimEnrollment)
 	return router
+}
+
+func (s *Server) identityProvisioningStatus(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in to continue.")
+		return
+	}
+	if s.provisioner == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "can_manage": false})
+		return
+	}
+	canManage, err := s.provisioner.IsAdmin(r.Context(), identityActor(session))
+	if err != nil {
+		s.internalError(w, fmt.Errorf("resolve identity provisioning role: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true, "can_manage": canManage, "provider": s.provisioner.Provider(),
+	})
+}
+
+func (s *Server) identityProvisioningGroups(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireProvisioningAdmin(w, r); !ok {
+		return
+	}
+	groups, err := s.provisioner.ListGroups(r.Context())
+	if err != nil {
+		s.internalError(w, fmt.Errorf("list identity groups: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+}
+
+func (s *Server) provisionIdentityApplication(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireProvisioningAdmin(w, r); !ok {
+		return
+	}
+	_, metadata, err := s.ownedPrincipal(r)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	var request struct {
+		Hostname     string `json:"hostname"`
+		CallbackPath string `json:"callback_path"`
+		Group        string `json:"group"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "Provide a hostname and optional group.")
+		return
+	}
+	hostname, err := routeauth.NormalizeHostname(request.Hostname)
+	if err != nil || !hostnameBelongsTo(hostname, metadata.Entitlement) {
+		writeError(w, http.StatusForbidden, "The hostname is outside this machine's authorized domain.")
+		return
+	}
+	callbackPath, err := normalizeIdentityCallbackPath(request.CallbackPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	group := strings.TrimSpace(request.Group)
+	if len(group) > 150 || strings.ContainsAny(group, "\r\n\x00") {
+		writeError(w, http.StatusBadRequest, "The group name is invalid.")
+		return
+	}
+	result, err := s.provisioner.ProvisionApplication(r.Context(), identity.ApplicationRequest{
+		Hostname: hostname, CallbackPath: callbackPath, Group: group,
+	})
+	if err != nil {
+		s.internalError(w, fmt.Errorf("provision identity application: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) requireProvisioningAdmin(w http.ResponseWriter, r *http.Request) (*browserSession, bool) {
+	session, err := s.requireSession(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Sign in to continue.")
+		return nil, false
+	}
+	if s.provisioner == nil {
+		writeError(w, http.StatusNotFound, "Identity provisioning is not enabled.")
+		return nil, false
+	}
+	admin, err := s.provisioner.IsAdmin(r.Context(), identityActor(session))
+	if err != nil {
+		s.internalError(w, fmt.Errorf("resolve identity provisioning role: %w", err))
+		return nil, false
+	}
+	if !admin {
+		writeError(w, http.StatusForbidden, "Identity administrator access is required.")
+		return nil, false
+	}
+	return session, true
+}
+
+func identityActor(session *browserSession) identity.Actor {
+	return identity.Actor{Subject: session.Subject, Username: session.Username, Email: session.Email}
+}
+
+func hostnameBelongsTo(hostname, entitlement string) bool {
+	entitlement = strings.TrimPrefix(strings.TrimSpace(entitlement), "route:")
+	return hostname == entitlement || strings.HasSuffix(hostname, "."+entitlement)
+}
+
+func normalizeIdentityCallbackPath(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "/_lfp/auth/callback", nil
+	}
+	if !strings.HasPrefix(value, "/_lfp/auth/") || strings.ContainsAny(value, "?#\r\n") {
+		return "", errors.New("callback path must be a reserved /_lfp/auth/ path")
+	}
+	return value, nil
 }
 
 type servicePrincipal struct {

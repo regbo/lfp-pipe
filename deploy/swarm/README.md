@@ -65,6 +65,21 @@ The Go API performs OIDC authorization-code flow with PKCE. It accepts only a
 verified ID token from the configured issuer and client, then checks the exact
 entitlement again before issuing a route credential.
 
+### Optional route identity provisioning
+
+Set `LFP_AUTH_IDENTITY_PROVISIONER=authentik` to let Authentik superusers add
+browser sign-in from a managed machine's configuration page. The adapter
+creates one hidden public PKCE application (default slug `lfp-pipe-routes`),
+adds only the exact callback URI for each selected hostname, and can create a
+non-superuser access group. Public PKCE clients do not distribute an OIDC
+client secret to managed machines.
+
+Leave the variable empty to disable provisioning. The control-plane API and UI
+use the provider-neutral `identity.Service` capability contract, so another
+identity system can replace the Authentik adapter without changing the machine
+configuration workflow. `LFP_AUTH_IDENTITY_APPLICATION_SLUG` and
+`LFP_AUTH_IDENTITY_APPLICATION_NAME` override the managed application identity.
+
 ## NATS callout keys
 
 Generate a dedicated Account NKey for signing Auth Callout responses and a

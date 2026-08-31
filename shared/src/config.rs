@@ -284,7 +284,8 @@ pub struct ClientAuthorizationConfig {
     /// Confidential OIDC relying-party client identifier.
     #[serde(default)]
     pub oidc_client_id: Option<String>,
-    /// File containing the OIDC relying-party client secret.
+    /// Optional file containing a confidential OIDC client secret. Public
+    /// clients omit this and rely on authorization-code PKCE.
     #[serde(default)]
     pub oidc_client_secret_file: Option<String>,
     /// OIDC scopes requested during browser login.
@@ -1007,17 +1008,9 @@ fn validate_authorization(authorization: &ClientAuthorizationConfig) -> anyhow::
     }
     if authorization.oidc_enabled() {
         let oidc_client_id = authorization.oidc_client_id.as_deref().unwrap_or_default();
-        let oidc_client_secret_file = authorization
-            .oidc_client_secret_file
-            .as_deref()
-            .unwrap_or_default();
         anyhow::ensure!(
             !oidc_client_id.trim().is_empty(),
             "authorization.oidc_client_id is required when oidc is enabled"
-        );
-        anyhow::ensure!(
-            !oidc_client_secret_file.trim().is_empty(),
-            "authorization.oidc_client_secret_file is required when oidc is enabled"
         );
         anyhow::ensure!(
             authorization
@@ -1763,6 +1756,36 @@ mod tests {
         assert!(authorization.oidc_enabled());
         assert_eq!(authorization.oidc_callback_path, "/_lfp/auth/callback");
         assert_eq!(authorization.oidc_session_ttl_seconds, 28_800);
+    }
+
+    #[test]
+    fn public_oidc_client_uses_pkce_without_a_secret_file() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [[routes]]
+                client_id = "public-oidc"
+                hostname = "public.example.com"
+
+                [routes.authorization]
+                enabled = true
+                bearer = false
+                oidc = true
+                issuer = "https://auth.example/application/o/pipe-routes/"
+                oidc_client_id = "pipe-routes"
+            "#,
+        )
+        .expect("public PKCE OIDC authorization");
+
+        let authorization = configs[0].authorization.as_ref().expect("authorization");
+        assert!(authorization.oidc_enabled());
+        assert!(authorization.oidc_client_secret_file.is_none());
     }
 
     #[test]

@@ -23,6 +23,9 @@ type Config struct {
 	AuthentikAPIURL          string
 	AuthentikAPIToken        string
 	AuthentikApplicationSlug string
+	IdentityProvisioner      string
+	IdentityApplicationSlug  string
+	IdentityApplicationName  string
 	OAuthTokenURL            string
 	CookieSecret             []byte
 	TicketSecret             []byte
@@ -66,6 +69,9 @@ func LoadArgs(args []string) (Config, error) {
 		OIDCScopes:               splitCSV(envOr("LFP_AUTH_OIDC_SCOPES", "openid,profile,email,entitlements")),
 		AuthentikAPIURL:          strings.TrimRight(os.Getenv("LFP_AUTH_AUTHENTIK_API_URL"), "/"),
 		AuthentikApplicationSlug: envOr("LFP_AUTH_AUTHENTIK_APPLICATION_SLUG", "lfp-pipe"),
+		IdentityProvisioner:      strings.ToLower(strings.TrimSpace(os.Getenv("LFP_AUTH_IDENTITY_PROVISIONER"))),
+		IdentityApplicationSlug:  strings.TrimSpace(os.Getenv("LFP_AUTH_IDENTITY_APPLICATION_SLUG")),
+		IdentityApplicationName:  envOr("LFP_AUTH_IDENTITY_APPLICATION_NAME", "LFP Pipe routes"),
 		OAuthTokenURL:            os.Getenv("LFP_AUTH_OAUTH_TOKEN_URL"),
 		NATSURLs:                 splitCSV(envOr("LFP_AUTH_NATS_URLS", "nats://127.0.0.1:4222")),
 		NATSPublicURLs:           splitCSV(envOr("LFP_AUTH_NATS_PUBLIC_URLS", envOr("LFP_AUTH_NATS_URLS", "tls://pipe.example.com:4222"))),
@@ -81,6 +87,9 @@ func LoadArgs(args []string) (Config, error) {
 			ColorStrong: envOr("LFP_AUTH_BRAND_COLOR_STRONG", "#e85c50"),
 			Ink:         envOr("LFP_AUTH_BRAND_INK", "#0b1426"),
 		},
+	}
+	if cfg.IdentityApplicationSlug == "" {
+		cfg.IdentityApplicationSlug = cfg.AuthentikApplicationSlug + "-routes"
 	}
 	flags := flag.NewFlagSet("lfp-connect-auth", flag.ContinueOnError)
 	flags.StringVar(&cfg.Brand.Name, "brand-name", cfg.Brand.Name, "management website brand name")
@@ -140,6 +149,12 @@ func LoadArgs(args []string) (Config, error) {
 	}
 	if cfg.Brand.Name == "" || cfg.Brand.LogoURL == "" || cfg.Brand.Wordmark == "" || cfg.Brand.FaviconURL == "" {
 		return Config{}, errors.New("brand name, logo URL, wordmark, and favicon URL must not be empty")
+	}
+	if cfg.IdentityProvisioner != "" && cfg.IdentityProvisioner != "authentik" {
+		return Config{}, fmt.Errorf("unsupported identity provisioner %q", cfg.IdentityProvisioner)
+	}
+	if cfg.IdentityProvisioner != "" && (cfg.IdentityApplicationSlug == "" || cfg.IdentityApplicationName == "") {
+		return Config{}, errors.New("identity application slug and name must not be empty when provisioning is enabled")
 	}
 	return cfg, nil
 }

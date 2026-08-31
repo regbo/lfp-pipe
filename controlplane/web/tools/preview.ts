@@ -64,6 +64,12 @@ Bun.serve({
     const url = new URL(request.url);
     if (url.pathname === "/api/branding") return json({ name: "LFP Pipe", logo_url: "/assets/lfp-coral.svg", wordmark: "pipe", favicon_url: "/assets/lfp-favicon.svg", color: "#ff6f61", color_strong: "#e85c50", ink: "#0b1426" });
     if (url.pathname === "/api/me") return json({ subject: "preview-user", name: "Local Preview", email: "preview@example.com", entitlements: ["desktop.pipe.example.com", "speedtest.pipe.example.com"], required_entitlement: "pipe.example.com", route_pattern: "*.pipe.example.com", control_plane_url: "https://pipe.example.com" });
+    if (url.pathname === "/api/identity-provisioning") return json({ enabled: true, can_manage: true, provider: { id: "authentik", display_name: "Authentik", capabilities: ["applications", "groups", "oidc"] } });
+    if (url.pathname === "/api/identity-provisioning/groups") return json({ groups: [{ id: "admins", name: "Pipe admins" }, { id: "users", name: "Pipe users" }] });
+    if (/^\/api\/service-principals\/\d+\/identity-applications$/.test(url.pathname) && request.method === "POST") {
+      const body = await request.json() as { hostname: string; callback_path: string; group: string };
+      return json({ provider_id: "authentik", application: "LFP Pipe routes", issuer: "https://auth.example.com/application/o/lfp-pipe-routes/", client_id: "lfp-pipe-routes", scopes: ["openid", "profile", "email"], callback_path: body.callback_path, callback_url: `https://${body.hostname}${body.callback_path}`, group: body.group, created_objects: ["redirect_uri"] });
+    }
     if (url.pathname === "/api/service-principals" && request.method === "GET") return json({ service_principals: principals });
     if (url.pathname === "/api/managed-clients") return json(managedClients());
     if (url.pathname === "/api/managed-client-events") {

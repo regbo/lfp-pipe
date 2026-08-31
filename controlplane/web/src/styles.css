@@ -144,6 +144,11 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .configuration-page { max-width: 1120px; min-height: 240px; padding-bottom: 72px; }
 .console-main.configuration-main { padding-bottom: 0; }
 .structured-config { display: grid; }
+.identity-provisioning { min-height: 58px; padding: 10px 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 11px; border-block: 1px solid var(--color-line); }
+.identity-provisioning-icon { width: 28px; height: 28px; display: grid; place-items: center; color: var(--color-brand-ink); background: var(--color-brand); border-radius: 7px; }
+.identity-provisioning > div:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.identity-provisioning strong { font-size: 12px; font-weight: 650; }
+.identity-provisioning span { color: var(--color-muted); font-size: 11px; line-height: 1.4; }
 .config-root-section { padding: 24px 0 28px; display: grid; gap: 16px; }
 .config-root-section + .config-root-section { border-top: 1px solid var(--color-line-strong); }
 .config-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -258,6 +263,11 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
   .config-footer { align-items: center; }
   .config-footer-actions { display: flex; }
   .config-page-footer { margin-inline: -14px; padding-inline: 14px; border-inline: 0; border-radius: 0; }
+}
+
+@media (max-width: 520px) {
+  .identity-provisioning { grid-template-columns: 30px minmax(0, 1fr); }
+  .identity-provisioning > .mantine-Button-root { grid-column: 2; justify-self: start; }
 }
 
 @media (max-width: 460px) {

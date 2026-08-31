@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Check, ExternalLink, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
+import { Check, ExternalLink, KeyRound, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
 import { parse, stringify } from "smol-toml";
-import { Accordion, ActionIcon, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
+import { Accordion, ActionIcon, Autocomplete, Button, Group, Modal, NumberInput, SegmentedControl, Select, SimpleGrid, Stack, TextInput } from "@mantine/core";
 import { backendHref, linkHref } from "./link-utils";
+import type { IdentityApplication, IdentityGroup, IdentityProvisioningStatus } from "./console-model";
 
 type Table = Record<string, unknown>;
 type Route = Table & { path_routes?: PathRoute[] };
@@ -48,10 +49,22 @@ function defaultAuthorization(): Table {
   };
 }
 
-type ConfigEditorProps = { toml: string; onChange: (toml: string) => void };
+type ConfigEditorProps = {
+  toml: string;
+  onChange: (toml: string) => void;
+  provisioning?: IdentityProvisioningStatus;
+  identityGroups?: IdentityGroup[];
+  onLoadIdentityGroups?: () => Promise<void>;
+  onProvisionIdentity?: (hostname: string, callbackPath: string, group: string) => Promise<IdentityApplication>;
+};
 
-export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
+export function ConfigEditor({ toml, onChange, provisioning, identityGroups = [], onLoadIdentityGroups, onProvisionIdentity }: ConfigEditorProps) {
   const [document, setDocument] = useState<Table>(() => parse(toml) as Table);
+  const [provisioningOpen, setProvisioningOpen] = useState(false);
+  const [provisioningTarget, setProvisioningTarget] = useState("");
+  const [provisioningGroup, setProvisioningGroup] = useState("");
+  const [provisioningBusy, setProvisioningBusy] = useState(false);
+  const [provisioningError, setProvisioningError] = useState("");
 
   function update(mutator: (draft: Table) => void) {
     const draft = structuredClone(document);
@@ -67,6 +80,16 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
   const defaultTlsTermination = Object.keys(acme).length > 0 && acme.enabled !== false;
   const defaultAuthorizationEnabled = Object.keys(authorization).length > 0 && authorization.enabled !== false;
   const routes = asRoutes(document.routes);
+  const identityTargets = routes.flatMap((route, routeIndex) => {
+    const hostname = text(route.hostname);
+    if (!hostname) return [];
+    const routeTarget = [{ value: `route:${routeIndex}`, label: `${hostname} · all paths` }];
+    const pathTargets = (asRoutes(route.path_routes) as PathRoute[]).map((path, pathIndex) => ({
+      value: `path:${routeIndex}:${pathIndex}`,
+      label: `${hostname}${text(path.path_prefix) || "/"}`,
+    }));
+    return [...routeTarget, ...pathTargets];
+  });
   const setDefault = (key: string, value: unknown) => update((draft) => { childTable(draft, "defaults")[key] = value; });
   const setOptionalDefault = (key: string, value: string) => update((draft) => {
     const defaults = childTable(draft, "defaults");
@@ -103,7 +126,63 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
     if (Object.keys(policy).length === 0) delete target.authorization;
   });
 
+  async function openIdentityProvisioning() {
+    const firstTarget = identityTargets[0]?.value ?? "";
+    setProvisioningTarget((current) => current || firstTarget);
+    setProvisioningError("");
+    setProvisioningOpen(true);
+    await onLoadIdentityGroups?.();
+  }
+
+  async function provisionIdentity() {
+    if (!onProvisionIdentity || !provisioningTarget) return;
+    const [kind, routeValue, pathValue] = provisioningTarget.split(":");
+    const routeIndex = Number(routeValue);
+    const pathIndex = Number(pathValue);
+    const route = routes[routeIndex];
+    const hostname = text(route?.hostname);
+    if (!hostname || !Number.isInteger(routeIndex)) return;
+    setProvisioningBusy(true);
+    setProvisioningError("");
+    try {
+      const result = await onProvisionIdentity(hostname, "/_lfp/auth/callback", provisioningGroup.trim());
+      update((draft) => {
+        const targetRoute = asRoutes(draft.routes)[routeIndex];
+        const target = kind === "path"
+          ? asRoutes(targetRoute.path_routes)[pathIndex]
+          : targetRoute;
+        const policy = childTable(target, "authorization");
+        Object.assign(policy, {
+          enabled: true,
+          bearer: false,
+          oidc: true,
+          issuer: result.issuer,
+          roles_claim: "groups",
+          required_roles: result.group ? [result.group] : [],
+          role_match: "any",
+          oidc_client_id: result.client_id,
+          oidc_scopes: result.scopes,
+          oidc_callback_path: result.callback_path,
+          oidc_logout_path: "/_lfp/auth/logout",
+          oidc_session_key_file: "~/.secrets/lfp-pipe/oidc-session-key",
+          oidc_session_ttl_seconds: 28800,
+        });
+        delete policy.oidc_client_secret_file;
+      });
+      setProvisioningOpen(false);
+    } catch (cause) {
+      setProvisioningError(cause instanceof Error ? cause.message : "Browser sign-in could not be provisioned.");
+    } finally {
+      setProvisioningBusy(false);
+    }
+  }
+
   return <div className="structured-config">
+    {provisioning?.enabled && provisioning.can_manage && provisioning.provider ? <section className="identity-provisioning" aria-label="Identity provisioning">
+      <div className="identity-provisioning-icon" aria-hidden="true"><KeyRound size={16} /></div>
+      <div><strong>Browser sign-in</strong><span>{provisioning.provider.display_name} can provision OIDC access and groups for this machine.</span></div>
+      <Button variant="default" size="xs" disabled={identityTargets.length === 0} onClick={() => void openIdentityProvisioning()}>Add sign-in</Button>
+    </section> : null}
     <section className="config-root-section" aria-labelledby="common-settings-heading">
       <div className="config-section-heading">
         <div><h2 id="common-settings-heading">Machine defaults</h2><span>Inherited by every public route unless it has an override.</span></div>
@@ -154,6 +233,15 @@ export function ConfigEditor({ toml, onChange }: ConfigEditorProps) {
         {routes.length === 0 ? <div className="routes-empty"><strong>No routes</strong><span>Add a public hostname to start forwarding traffic.</span></div> : null}
       </div>
     </section>
+    <Modal opened={provisioningOpen} onClose={() => !provisioningBusy && setProvisioningOpen(false)} title="Add browser sign-in" size="md" centered>
+      <div className="stack-form">
+        <Select label="Protect" value={provisioningTarget} data={identityTargets} allowDeselect={false} onChange={(value) => value && setProvisioningTarget(value)} />
+        <Autocomplete label="Required group" description="Leave blank to allow any signed-in user. Enter a new name to create the group." value={provisioningGroup} data={identityGroups.map((group) => group.name)} onChange={setProvisioningGroup} placeholder="Any signed-in user" />
+        <p className="field-note">Pipe will create or update a public PKCE application in {provisioning?.provider?.display_name} and add the exact callback for this hostname.</p>
+        {provisioningError ? <p className="inline-error" role="alert">{provisioningError}</p> : null}
+        <Group justify="flex-end"><Button variant="default" disabled={provisioningBusy} onClick={() => setProvisioningOpen(false)}>Cancel</Button><Button loading={provisioningBusy} disabled={!provisioningTarget} onClick={() => void provisionIdentity()}>Add sign-in</Button></Group>
+      </div>
+    </Modal>
   </div>;
 }
 
@@ -259,7 +347,7 @@ function AuthorizationFields({ authorization, inherited = {}, linkBase = "", onC
       {bearerEnabled ? <LinkField className="field-span-full" label="JWKS URL" value={text(authorization.jwks_uri)} placeholder={inheritedText("jwks_uri")} onChange={(value) => onChange("jwks_uri", value)} /> : null}
       {bearerEnabled ? <TextField className="field-span-full" label="JWKS cache file" value={text(authorization.jwks_cache_file)} placeholder={inheritedText("jwks_cache_file", "~/.cache/lfp-pipe/auth/jwks.json")} onChange={(value) => onChange("jwks_cache_file", value)} /> : null}
       {oidcEnabled ? <TextField label="OIDC client ID" value={text(authorization.oidc_client_id)} placeholder={inheritedText("oidc_client_id")} onChange={(value) => onChange("oidc_client_id", value)} /> : null}
-      {oidcEnabled ? <TextField label="OIDC secret file" value={text(authorization.oidc_client_secret_file)} placeholder={inheritedText("oidc_client_secret_file")} onChange={(value) => onChange("oidc_client_secret_file", value)} /> : null}
+      {oidcEnabled ? <TextField label="OIDC secret file (optional)" value={text(authorization.oidc_client_secret_file)} placeholder={inheritedText("oidc_client_secret_file")} onChange={(value) => onChange("oidc_client_secret_file", value)} hint="Only for confidential clients" /> : null}
       {oidcEnabled ? <TextField className="field-span-full" label="OIDC scopes" value={list(authorization.oidc_scopes)} placeholder={inheritedList("oidc_scopes", "openid, profile, email, groups")} onChange={(value) => onChange("oidc_scopes", splitList(value))} hint="Comma separated" /> : null}
       {oidcEnabled ? <LinkField label="Callback path" value={text(authorization.oidc_callback_path)} placeholder={inheritedText("oidc_callback_path", "/_lfp/auth/callback")} defaultScheme={linkBase} onChange={(value) => onChange("oidc_callback_path", value)} /> : null}
       {oidcEnabled ? <LinkField label="Logout path" value={text(authorization.oidc_logout_path)} placeholder={inheritedText("oidc_logout_path", "/_lfp/auth/logout")} defaultScheme={linkBase} onChange={(value) => onChange("oidc_logout_path", value)} /> : null}

@@ -77,7 +77,7 @@ struct OidcAuthorizer {
     config: Arc<ClientAuthorizationConfig>,
     hostname: Arc<String>,
     provider: CoreProviderMetadata,
-    client_secret: Arc<String>,
+    client_secret: Arc<Option<String>>,
     http: openidconnect::reqwest::Client,
     cookie_key: Key,
     flow_cookie: Arc<String>,
@@ -175,20 +175,21 @@ impl Authorizer {
 
 impl OidcAuthorizer {
     async fn load(config: Arc<ClientAuthorizationConfig>, hostname: &str) -> anyhow::Result<Self> {
-        let secret_path = crate::paths::expand_home(
-            config
-                .oidc_client_secret_file
-                .as_deref()
-                .context("OIDC client secret file is missing")?,
-        )?;
-        let client_secret = fs::read_to_string(&secret_path)
-            .with_context(|| format!("read OIDC client secret {}", secret_path.display()))?
-            .trim()
-            .to_string();
-        ensure!(
-            !client_secret.is_empty(),
-            "OIDC client secret file is empty"
-        );
+        let client_secret = if let Some(path) = config
+            .oidc_client_secret_file
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+        {
+            let secret_path = crate::paths::expand_home(path)?;
+            let secret = fs::read_to_string(&secret_path)
+                .with_context(|| format!("read OIDC client secret {}", secret_path.display()))?
+                .trim()
+                .to_string();
+            ensure!(!secret.is_empty(), "OIDC client secret file is empty");
+            Some(secret)
+        } else {
+            None
+        };
 
         let http = openidconnect::reqwest::ClientBuilder::new()
             .redirect(openidconnect::reqwest::redirect::Policy::none())
@@ -250,7 +251,10 @@ impl OidcAuthorizer {
                     .clone()
                     .context("OIDC client ID is missing")?,
             ),
-            Some(ClientSecret::new((*self.client_secret).clone())),
+            self.client_secret
+                .as_ref()
+                .as_ref()
+                .map(|secret| ClientSecret::new(secret.clone())),
         )
         .set_redirect_uri(RedirectUrl::new(redirect).context("parse OIDC redirect URL")?))
     }

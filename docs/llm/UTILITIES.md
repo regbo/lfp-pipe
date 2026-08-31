@@ -22,6 +22,7 @@ the server or client crates.
 | `connect_nats` | `shared/src/nats.rs` | Establish a deterministic NATS control-plane connection. | Server and client startup |
 | `connect_nats_with_token` | `shared/src/nats.rs` | Establish NATS connections from short-lived in-memory OAuth exchanges. | OAuth tunnel client |
 | `BrandConfig`, `/api/branding` | `controlplane/internal/config`, `controlplane/internal/httpapi` | Resolve CLI-over-environment management branding and expose it to the static web console. | Auth service and management web |
+| `identity.Service`, Authentik `Provisioner`, `/api/identity-provisioning` | `controlplane/internal/identity`, `controlplane/internal/authentik`, `controlplane/internal/httpapi` | Advertise optional identity-management capabilities, verify provider administrators server-side, and idempotently provision public PKCE route applications, exact callbacks, and access groups. | Auth service and management web |
 | `hostname_request_subject` | `shared/src/routing.rs` | Convert a validated hostname into a reversed-domain NATS subject. | Domain-scoped control plane |
 | `PrefixEnvelope` | `shared/src/prefix.rs` | Encode and validate the versioned callback-to-ingress binding prefix. | Client callback and public server |
 | `ConnectionRequest`, `ConnectionClaim`, `ConnectionClaimAck` | `shared/src/protocol.rs` | Define JSON messages exchanged over NATS. | Server and client control plane |

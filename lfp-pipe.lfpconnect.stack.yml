@@ -70,6 +70,9 @@ services:
       LFP_AUTH_AUTHENTIK_API_URL: https://auth.${DOMAIN?Variable not set}/api/v3
       LFP_AUTH_AUTHENTIK_API_TOKEN_FILE: /run/secrets/authentik_api_token
       LFP_AUTH_AUTHENTIK_APPLICATION_SLUG: ${AUTHENTIK_APPLICATION_SLUG?Variable not set}
+      LFP_AUTH_IDENTITY_PROVISIONER: ${IDENTITY_PROVISIONER:-authentik}
+      LFP_AUTH_IDENTITY_APPLICATION_SLUG: ${IDENTITY_APPLICATION_SLUG:-lfp-pipe-routes}
+      LFP_AUTH_IDENTITY_APPLICATION_NAME: ${IDENTITY_APPLICATION_NAME:-LFP Pipe routes}
       LFP_AUTH_OAUTH_TOKEN_URL: https://auth.${DOMAIN?Variable not set}/application/o/token/
       LFP_AUTH_COOKIE_SECRET_FILE: /run/secrets/cookie_secret
       LFP_AUTH_TICKET_SECRET_FILE: /run/secrets/ticket_secret

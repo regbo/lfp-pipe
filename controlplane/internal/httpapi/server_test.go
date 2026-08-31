@@ -106,3 +106,19 @@ func TestMetadataFromUser(t *testing.T) {
 		t.Fatalf("unexpected metadata %#v", metadata)
 	}
 }
+
+func TestIdentityProvisioningInputValidation(t *testing.T) {
+	t.Parallel()
+	if !hostnameBelongsTo("chat.pipe.example.com", "pipe.example.com") {
+		t.Fatal("expected child hostname to belong to entitlement")
+	}
+	if hostnameBelongsTo("chat.other.example.com", "pipe.example.com") {
+		t.Fatal("unexpected cross-entitlement hostname match")
+	}
+	if got, err := normalizeIdentityCallbackPath(""); err != nil || got != "/_lfp/auth/callback" {
+		t.Fatalf("unexpected default callback %q: %v", got, err)
+	}
+	if _, err := normalizeIdentityCallbackPath("/oauth/callback?next=x"); err == nil {
+		t.Fatal("expected non-reserved callback to be rejected")
+	}
+}

@@ -22,13 +22,14 @@ type Client struct {
 
 // User is the Authentik service-account representation used by the control plane.
 type User struct {
-	PK         int            `json:"pk"`
-	UID        string         `json:"uid"`
-	Username   string         `json:"username"`
-	Name       string         `json:"name"`
-	Type       string         `json:"type"`
-	IsActive   bool           `json:"is_active"`
-	Attributes map[string]any `json:"attributes"`
+	PK          int            `json:"pk"`
+	UID         string         `json:"uid"`
+	Username    string         `json:"username"`
+	Name        string         `json:"name"`
+	Type        string         `json:"type"`
+	IsActive    bool           `json:"is_active"`
+	IsSuperuser bool           `json:"is_superuser"`
+	Attributes  map[string]any `json:"attributes"`
 }
 
 // CreatedServiceAccount contains the one-time app password returned by Authentik.
@@ -77,6 +78,21 @@ func (c *Client) GetUser(ctx context.Context, pk int) (User, error) {
 	var user User
 	err := c.request(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &user)
 	return user, err
+}
+
+// FindUserByUsername resolves an exact Authentik user for server-side role checks.
+func (c *Client) FindUserByUsername(ctx context.Context, username string) (User, error) {
+	query := url.Values{"username": {username}, "page_size": {"2"}}
+	var response page[User]
+	if err := c.request(ctx, http.MethodGet, "/core/users/?"+query.Encode(), nil, &response); err != nil {
+		return User{}, err
+	}
+	for _, user := range response.Results {
+		if user.Username == username {
+			return user, nil
+		}
+	}
+	return User{}, fmt.Errorf("Authentik user %q was not found", username)
 }
 
 // CreateServiceAccount creates a non-expiring service account and one app password.

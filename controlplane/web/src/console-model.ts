@@ -10,6 +10,35 @@ export type Identity = {
   control_plane_url: string;
 };
 
+export type IdentityProvider = {
+  id: string;
+  display_name: string;
+  capabilities: string[];
+};
+
+export type IdentityProvisioningStatus = {
+  enabled: boolean;
+  can_manage: boolean;
+  provider?: IdentityProvider;
+};
+
+export type IdentityGroup = {
+  id: string;
+  name: string;
+};
+
+export type IdentityApplication = {
+  provider_id: string;
+  application: string;
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  callback_path: string;
+  callback_url: string;
+  group?: string;
+  created_objects: string[];
+};
+
 export type TunnelToken = {
   token: string;
   expires_at: string;

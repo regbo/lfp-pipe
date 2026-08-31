@@ -37,6 +37,9 @@ import {
   type CreationMode,
   type Enrollment,
   type Identity,
+  type IdentityApplication,
+  type IdentityGroup,
+  type IdentityProvisioningStatus,
   type MachineFilter,
   type ManagedClient,
   type OAuthSettings,
@@ -72,6 +75,8 @@ function downloadBlob(name: string, body: BlobPart, type: string) {
 export function ManagementConsole() {
   const [brand, setBrand] = useState(defaultBrand);
   const [identity, setIdentity] = useState<Identity>();
+  const [identityProvisioning, setIdentityProvisioning] = useState<IdentityProvisioningStatus>();
+  const [identityGroups, setIdentityGroups] = useState<IdentityGroup[]>([]);
   const [activePage, setActivePage] = useState<ConsolePage>("machines");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedMachine, setSelectedMachine] = useState("");
@@ -193,6 +198,25 @@ export function ManagementConsole() {
     }
   }
 
+  async function loadIdentityGroups() {
+    if (!identityProvisioning?.can_manage || identityGroups.length > 0) return;
+    const value = await api<{ groups: IdentityGroup[] }>("/api/identity-provisioning/groups");
+    setIdentityGroups(value.groups);
+  }
+
+  async function provisionIdentity(hostname: string, callbackPath: string, group: string) {
+    if (!editingPrincipal) throw new Error("Open a managed machine before adding sign-in.");
+    const result = await api<IdentityApplication>(`/api/service-principals/${editingPrincipal.id}/identity-applications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hostname, callback_path: callbackPath, group }),
+    });
+    if (result.group && !identityGroups.some((candidate) => candidate.name === result.group)) {
+      setIdentityGroups((current) => [...current, { id: result.group!, name: result.group! }].sort((left, right) => left.name.localeCompare(right.name)));
+    }
+    return result;
+  }
+
   useEffect(() => {
     fetch("/api/branding", { credentials: "same-origin" })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("branding unavailable")))
@@ -209,6 +233,9 @@ export function ManagementConsole() {
         setPrincipalEntitlement(normalized.includes(value.required_entitlement) ? value.required_entitlement : normalized[0] ?? "");
       })
       .catch(() => undefined);
+    api<IdentityProvisioningStatus>("/api/identity-provisioning")
+      .then(setIdentityProvisioning)
+      .catch(() => setIdentityProvisioning({ enabled: false, can_manage: false }));
     void loadPrincipals();
     void loadDevices();
     const deviceTimer = window.setInterval(() => void loadDevices(), 15000);
@@ -472,7 +499,7 @@ http_backend_addr = ":80"
     <div className="mobile-header"><button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}><MenuIcon size={20} /></button><Brand settings={brand} /></div>
 
     <main className={`console-main${editingPrincipal ? " configuration-main" : ""}`} id="main-content">
-      {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} /></MachineDetail> : null}
+      {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} provisioning={identityProvisioning} identityGroups={identityGroups} onLoadIdentityGroups={loadIdentityGroups} onProvisionIdentity={provisionIdentity} /></MachineDetail> : null}
       {!editingPrincipal && activePage === "machines" && selectedClient ? <MachineDetail client={selectedClient} principal={principalByUsername.get(selectedClient.username)} identity={identity} loading={false} dirty={false} saving={false} onBack={() => setSelectedMachine("")} onSave={() => undefined} onExport={() => undefined} onDelete={setDeleteCandidate} /> : null}
       {!editingPrincipal && activePage === "machines" && !selectedClient ? <MachinesPage clients={managedClients} enrollments={enrollments} principals={principalByUsername} routes={routesByUsername} loading={devicesLoading} error={devicesError} search={machineSearch} filter={machineFilter} selected={selectedPrincipals} onSearch={setMachineSearch} onFilter={setMachineFilter} onOpen={openMachine} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onApprove={(enrollment) => void claimEnrollment(enrollment)} onToggle={togglePrincipal} onCreate={openCreation} onExport={() => void downloadSelectedConfigs()} /> : null}
       {!editingPrincipal && activePage === "routes" ? <RoutesPage routes={routes} search={routeSearch} onSearch={setRouteSearch} onEdit={(principal) => void editConfig(principal)} onAdd={() => setRouteMachineOpen(true)} /> : null}
