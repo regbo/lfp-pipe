@@ -56,16 +56,16 @@ const brandVariants: VariantColorsResolver = (input) => {
 
 export const appTheme = createTheme({
   primaryColor: "coral",
-  defaultRadius: "md",
+  defaultRadius: "sm",
   fontFamily: '"Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif',
   colors: {
     coral: ["#fff1ef", "#ffe2de", "#ffc4bd", "#ffa59b", "#ff877b", "#ff6f61", "#e85c50", "#c9473d", "#a93730", "#872b26"],
   },
   variantColorResolver: brandVariants,
   components: {
-    TextInput: TextInput.extend({ defaultProps: { size: "xs" } }),
-    Select: Select.extend({ defaultProps: { size: "xs", allowDeselect: false } }),
-    Button: Button.extend({ defaultProps: { size: "xs", color: "coral" } }),
+    TextInput: TextInput.extend({ defaultProps: { size: "sm" } }),
+    Select: Select.extend({ defaultProps: { size: "sm", allowDeselect: false } }),
+    Button: Button.extend({ defaultProps: { size: "sm", color: "coral" } }),
     Loader: Loader.extend({
       defaultProps: { color: "var(--color-brand)", type: "dots" },
       classNames: { root: "app-loader" },
