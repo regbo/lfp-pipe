@@ -164,18 +164,9 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .structured-config .mantine-Input-input { font-family: var(--font-mono); font-size: 11px; }
 .structured-config .mantine-Input-input::placeholder { color: var(--color-muted); font-style: italic; opacity: 0.72; }
 .editable-link-field { min-width: 0; display: grid; align-content: start; gap: 2px; }
-.editable-link-label { min-height: 17px; display: flex; align-items: flex-end; font-size: 11px; font-weight: 630; }
-.editable-link-row { min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 8px; }
-.editable-link-values { min-width: 0; display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.editable-link-values a { min-width: 0; display: inline-flex; align-items: center; gap: 5px; color: var(--color-text); font-family: var(--font-mono); font-size: 11px; text-decoration-color: color-mix(in srgb, currentColor 36%, transparent); text-underline-offset: 3px; }
-.editable-link-values a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.editable-link-values a svg { flex: none; color: var(--color-muted); }
-.editable-link-values a:hover { color: var(--color-brand-strong); text-decoration-color: currentColor; }
-.link-edit-button { height: 25px; padding: 0 7px; flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--color-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 10px; font-weight: 650; cursor: pointer; }
-.link-edit-button:hover { color: var(--color-text); background: var(--color-surface-soft); border-color: var(--color-line); }
-.editable-link-hint { min-height: 15px; color: var(--color-muted); font-size: 10px; line-height: 15px; }
-.editable-link-editor { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: end; gap: 6px; }
-.editable-link-editor > .mantine-ActionIcon-root { margin-bottom: 1px; }
+.link-input-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: end; gap: 6px; }
+.link-open-actions { min-height: 30px; display: flex; align-items: center; gap: 4px; }
+.link-open-actions .mantine-ActionIcon-root { width: 30px; height: 30px; }
 .route-list { display: grid; border-top: 1px solid var(--color-line); }
 .route-config { position: relative; display: grid; border-bottom: 1px solid var(--color-line); scroll-margin-block: 32px; }
 .route-config::before { content: ""; position: absolute; top: 48px; bottom: 17px; left: 15px; width: 1px; background: var(--color-line-strong); }
