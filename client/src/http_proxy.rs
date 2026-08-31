@@ -158,8 +158,48 @@ async fn handle_request_inner<'a>(
         None
     };
 
+    if let Some(response) = canonical_prefix_redirect(request.uri(), backend)? {
+        return Ok(RequestAction::Respond(response));
+    }
+
     prepare_request(request, backend, client_ip, scheme, identity.as_ref())?;
     Ok(RequestAction::Forward(backend))
+}
+
+/// Keep relative browser URLs beneath a stripped path route. Without the
+/// trailing slash, `static/app.js` at `/app` resolves to `/static/app.js`
+/// instead of `/app/static/app.js` before the proxy has a chance to strip it.
+fn canonical_prefix_redirect(
+    uri: &Uri,
+    backend: &BackendRuntime,
+) -> anyhow::Result<Option<AuthResponse>> {
+    if !backend.rule.strip_path_prefix {
+        return Ok(None);
+    }
+    let prefix = backend
+        .rule
+        .path_prefix
+        .as_deref()
+        .context("missing path_prefix")?
+        .trim_end_matches('/');
+    if prefix.is_empty() || prefix == "/" || uri.path() != prefix {
+        return Ok(None);
+    }
+
+    let location = match uri.query() {
+        Some(query) => format!("{prefix}/?{query}"),
+        None => format!("{prefix}/"),
+    };
+    let mut headers = hyper::HeaderMap::new();
+    headers.insert(
+        header::LOCATION,
+        HeaderValue::from_str(&location).context("invalid canonical path redirect")?,
+    );
+    Ok(Some(AuthResponse {
+        status: StatusCode::PERMANENT_REDIRECT,
+        headers,
+        body: Bytes::new(),
+    }))
 }
 
 fn prepare_request<B>(
@@ -350,7 +390,7 @@ fn full_body(body: Bytes) -> ProxyBody {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_request, strip_uri_prefix};
+    use super::{canonical_prefix_redirect, prepare_request, strip_uri_prefix};
     use crate::{BackendRuntime, authorization::AuthenticatedIdentity};
     use hyper::{Request, Uri, header};
     use shared::config::BackendRule;
@@ -367,23 +407,64 @@ mod tests {
     }
 
     #[test]
-    fn proxy_request_replaces_spoofed_headers_with_verified_identity() {
-        let backend = BackendRuntime {
+    fn stripped_path_route_redirects_exact_prefix_and_preserves_query() {
+        let backend = backend_rule(Some("/dashboard/"), true);
+        let uri: Uri = "/dashboard?mode=live".parse().expect("URI");
+        let response = canonical_prefix_redirect(&uri, &backend)
+            .expect("redirect check")
+            .expect("redirect");
+
+        assert_eq!(response.status, hyper::StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(response.headers[header::LOCATION], "/dashboard/?mode=live");
+    }
+
+    #[test]
+    fn canonical_redirect_only_applies_to_exact_non_root_stripped_prefix() {
+        let stripped = backend_rule(Some("/dashboard"), true);
+        let preserved = backend_rule(Some("/dashboard"), false);
+        let root = backend_rule(Some("/"), true);
+
+        assert!(
+            canonical_prefix_redirect(&"/dashboard/assets/app.js".parse().unwrap(), &stripped)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            canonical_prefix_redirect(&"/dashboard".parse().unwrap(), &preserved)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            canonical_prefix_redirect(&"/".parse().unwrap(), &root)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn backend_rule(path_prefix: Option<&str>, strip_path_prefix: bool) -> BackendRuntime {
+        BackendRuntime {
             rule: BackendRule {
                 pattern: "service.example".to_string(),
-                path_prefix: Some("/api".to_string()),
-                strip_path_prefix: true,
+                path_prefix: path_prefix.map(str::to_string),
+                strip_path_prefix,
                 proxy_headers: true,
                 backend_addr: "127.0.0.1:8080".to_string(),
-                backend_host: Some("127.0.0.1:8080".to_string()),
+                backend_host: None,
                 http_backend_addr: None,
                 authorization: None,
             },
             authorization: None,
-        };
+        }
+    }
+
+    #[test]
+    fn proxy_request_replaces_spoofed_headers_with_verified_identity() {
+        let mut backend = backend_rule(Some("/api"), true);
+        backend.rule.backend_host = Some("127.0.0.1:8080".to_string());
         let mut request = Request::builder()
             .uri("/api/jobs?stream=false")
             .header(header::HOST, "service.example")
+            .header(header::RANGE, "bytes=0-1023")
             .header("x-forwarded-for", "203.0.113.99")
             .header("x-forwarded-user", "attacker")
             .header("x-authentik-uid", "attacker")
@@ -409,6 +490,7 @@ mod tests {
 
         assert_eq!(request.uri().to_string(), "/jobs?stream=false");
         assert_eq!(request.headers()[header::HOST], "127.0.0.1:8080");
+        assert_eq!(request.headers()[header::RANGE], "bytes=0-1023");
         assert_eq!(request.headers()["x-forwarded-for"], "198.51.100.24");
         assert_eq!(request.headers()["x-forwarded-host"], "service.example");
         assert_eq!(request.headers()["x-forwarded-user"], "regbo");
