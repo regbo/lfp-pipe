@@ -164,9 +164,12 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .structured-config .mantine-Input-input { font-family: var(--font-mono); font-size: 11px; }
 .structured-config .mantine-Input-input::placeholder { color: var(--color-muted); font-style: italic; opacity: 0.72; }
 .editable-link-field { min-width: 0; display: grid; align-content: start; gap: 2px; }
-.link-input-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: end; gap: 6px; }
-.link-open-actions { min-height: 30px; display: flex; align-items: center; gap: 4px; }
-.link-open-actions .mantine-ActionIcon-root { width: 30px; height: 30px; }
+.link-input-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 6px; }
+.link-open-actions { min-height: 30px; margin-top: 17px; display: flex; align-items: center; gap: 4px; }
+.link-open-icon, .link-open-placeholder { width: 30px; height: 30px; flex: none; display: grid; place-items: center; }
+.link-open-icon { color: var(--color-muted); border-radius: var(--radius-sm); }
+.link-open-icon:hover { color: var(--color-brand-strong); }
+.link-open-icon:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 1px; }
 .route-list { display: grid; border-top: 1px solid var(--color-line); }
 .route-config { position: relative; display: grid; border-bottom: 1px solid var(--color-line); scroll-margin-block: 32px; }
 .route-config::before { content: ""; position: absolute; top: 48px; bottom: 17px; left: 15px; width: 1px; background: var(--color-line-strong); }

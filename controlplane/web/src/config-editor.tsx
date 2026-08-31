@@ -284,7 +284,7 @@ function LinkField({ label, value, onChange, hint, className, placeholder, defau
   return <div className={`editable-link-field${className ? ` ${className}` : ""}`}>
     <div className="link-input-row">
       <div className="link-open-actions">
-        {links.length > 0 ? links.map((item) => <ActionIcon key={`${item.href}-${item.label}`} component="a" href={item.href} target="_blank" rel="noreferrer noopener" variant="default" title={`Open ${item.label}`} aria-label={`Open ${label}: ${item.label}`}><ExternalLink size={14} aria-hidden="true" /></ActionIcon>) : <ActionIcon type="button" variant="default" title={`${label} has no link to open`} aria-label={`${label} has no link to open`} disabled><ExternalLink size={14} aria-hidden="true" /></ActionIcon>}
+        {links.length > 0 ? links.map((item) => <a className="link-open-icon" key={`${item.href}-${item.label}`} href={item.href} target="_blank" rel="noreferrer noopener" title={`Open ${item.label}`} aria-label={`Open ${label}: ${item.label}`}><ExternalLink size={14} aria-hidden="true" /></a>) : <span className="link-open-placeholder" aria-hidden="true" />}
       </div>
       <TextField label={label} value={value} placeholder={placeholder} onChange={onChange} hint={hint} />
     </div>
