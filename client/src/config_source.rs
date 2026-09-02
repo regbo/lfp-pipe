@@ -308,6 +308,8 @@ fn applied_config_status(configs: &[ClientConfig]) -> String {
     let route_count = configs.len();
     if route_count == 0 {
         "Connected".to_string()
+    } else if route_count == 1 {
+        "Connected - 1 Route".to_string()
     } else {
         format!("Connected - {route_count} Routes")
     }
@@ -344,7 +346,7 @@ backend_addr = "127.0.0.1:6565"
 "#,
         )
         .expect("config");
-        assert_eq!(applied_config_status(&config), "Connected - 1 Routes");
+        assert_eq!(applied_config_status(&config), "Connected - 1 Route");
         assert_eq!(
             applied_config_status(&[config[0].clone(), config[0].clone()]),
             "Connected - 2 Routes"
