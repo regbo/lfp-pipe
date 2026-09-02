@@ -306,20 +306,10 @@ pub async fn run_central_with_reporter(
 
 fn applied_config_status(configs: &[ClientConfig]) -> String {
     let route_count = configs.len();
-    let backend_count = configs
-        .iter()
-        .map(|config| config.backend_rules.len())
-        .sum::<usize>();
-    let first_backend = configs
-        .iter()
-        .flat_map(|config| &config.backend_rules)
-        .next()
-        .map(|rule| rule.resolved_http_backend_addr());
-    match (backend_count, first_backend) {
-        (0, _) => format!("Applied · {route_count} route(s)"),
-        (1, Some(backend)) => format!("Applied · {backend}"),
-        (_, Some(backend)) => format!("Applied · {route_count} route(s) · {backend} + more"),
-        _ => format!("Applied · {route_count} route(s)"),
+    if route_count == 0 {
+        "Connected".to_string()
+    } else {
+        format!("Connected - {route_count} Routes")
     }
 }
 
@@ -342,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn applied_status_names_the_active_backend() {
+    fn applied_status_reports_the_route_count() {
         let config = parse_client_config_document(
             r#"
 client_id = "sports"
@@ -354,6 +344,11 @@ backend_addr = "127.0.0.1:6565"
 "#,
         )
         .expect("config");
-        assert_eq!(applied_config_status(&config), "Applied · 127.0.0.1:6565");
+        assert_eq!(applied_config_status(&config), "Connected - 1 Routes");
+        assert_eq!(
+            applied_config_status(&[config[0].clone(), config[0].clone()]),
+            "Connected - 2 Routes"
+        );
+        assert_eq!(applied_config_status(&[]), "Connected");
     }
 }
