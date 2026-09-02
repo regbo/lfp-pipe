@@ -83,6 +83,47 @@ func TestDeviceRegistryRejectsOlderCrossReplicaPresence(t *testing.T) {
 	}
 }
 
+func TestManagedClientConfigStatusComparesAppliedAndDesiredRevisions(t *testing.T) {
+	t.Parallel()
+	registry := newDeviceRegistry()
+	registry.record(deviceState{
+		Username: "client", LastSeen: time.Now().UTC(), Online: true,
+		AppliedConfigRevision: configRevision("old"),
+	})
+	server := &Server{devices: registry}
+	owned := map[string]authentikapi.User{
+		"client": {
+			Username: "client",
+			Attributes: map[string]any{"lfp_pipe": map[string]any{
+				"managed": true, "config_toml": "new",
+			}},
+		},
+	}
+	state := server.managedClientStates(owned)[0]
+	if state.ConfigSynced || state.DesiredConfigRevision != configRevision("new") {
+		t.Fatalf("stale applied configuration was reported as synchronized: %#v", state)
+	}
+
+	registry.record(deviceState{
+		Username: "client", LastSeen: time.Now().UTC().Add(time.Second), Online: true,
+		AppliedConfigRevision: configRevision("new"),
+	})
+	state = server.managedClientStates(owned)[0]
+	if !state.ConfigSynced {
+		t.Fatalf("matching applied configuration was not synchronized: %#v", state)
+	}
+}
+
+func TestConfigRevisionIsStableAndContentSensitive(t *testing.T) {
+	t.Parallel()
+	if configRevision("same") != configRevision("same") {
+		t.Fatal("equal documents produced different revisions")
+	}
+	if configRevision("old") == configRevision("new") {
+		t.Fatal("different documents produced the same revision")
+	}
+}
+
 func TestOwnedEntitlementRequiresExactEffectiveEntitlement(t *testing.T) {
 	t.Parallel()
 	got, err := ownedEntitlement([]string{"route:pipe.example.com"}, "pipe.example.com", "pipe.example.com")

@@ -3,19 +3,32 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
+use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use shared::config::{CentralClientBootstrap, ClientConfig, parse_client_config_document};
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{
+    sync::mpsc,
+    time::{MissedTickBehavior, interval, sleep},
+};
 
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const APPLIED_CONFIG_HEADER: &str = "X-LFP-Pipe-Config-Revision";
 
 #[derive(Debug, Deserialize)]
 struct CentralResponse {
     config_toml: String,
+    #[serde(default)]
+    config_revision: Option<String>,
     username: String,
+}
+
+struct CentralSnapshot {
+    configs: Vec<ClientConfig>,
+    revision: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,8 +38,11 @@ struct CentralSettings {
     scopes: Vec<String>,
 }
 
-fn device_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    request
+fn device_headers(
+    request: reqwest::RequestBuilder,
+    applied_revision: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let request = request
         .header(
             "X-LFP-Pipe-Device",
             std::env::var("COMPUTERNAME")
@@ -34,7 +50,11 @@ fn device_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
                 .unwrap_or_else(|_| "lfp-pipe-client".into()),
         )
         .header("X-LFP-Pipe-Version", env!("CARGO_PKG_VERSION"))
-        .header("X-LFP-Pipe-Platform", std::env::consts::OS)
+        .header("X-LFP-Pipe-Platform", std::env::consts::OS);
+    match applied_revision {
+        Some(revision) => request.header(APPLIED_CONFIG_HEADER, revision),
+        None => request,
+    }
 }
 
 async fn central_access(
@@ -74,6 +94,13 @@ async fn central_access(
 pub async fn fetch_central(
     bootstrap: &CentralClientBootstrap,
 ) -> anyhow::Result<Vec<ClientConfig>> {
+    Ok(fetch_central_snapshot(bootstrap, None).await?.configs)
+}
+
+async fn fetch_central_snapshot(
+    bootstrap: &CentralClientBootstrap,
+    applied_revision: Option<&str>,
+) -> anyhow::Result<CentralSnapshot> {
     let secret_file = bootstrap.client_secret_file.as_deref().context(
         "central config requires client_secret_file or LFP_PIPE_OAUTH_CLIENT_SECRET_FILE",
     )?;
@@ -81,16 +108,19 @@ pub async fn fetch_central(
     let (http, settings, access_token) = central_access(bootstrap)
         .await
         .context("authenticate central client")?;
-    let response = device_headers(http.get(format!("{base_url}/api/client-config")))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .context("fetch central client configuration")?
-        .error_for_status()
-        .context("central client configuration was rejected")?
-        .json::<CentralResponse>()
-        .await
-        .context("decode central client configuration")?;
+    let response = device_headers(
+        http.get(format!("{base_url}/api/client-config")),
+        applied_revision,
+    )
+    .bearer_auth(access_token)
+    .send()
+    .await
+    .context("fetch central client configuration")?
+    .error_for_status()
+    .context("central client configuration was rejected")?
+    .json::<CentralResponse>()
+    .await
+    .context("decode central client configuration")?;
     let mut configs = parse_client_config_document(&response.config_toml)?;
     for config in &mut configs {
         let oauth = config
@@ -108,24 +138,38 @@ pub async fn fetch_central(
             .clone_from(&bootstrap.control_plane_url);
         oauth.scopes.clone_from(&settings.scopes);
     }
-    Ok(configs)
+    Ok(CentralSnapshot {
+        configs,
+        // Older control planes do not return a revision. The sentinel keeps
+        // mixed-version rollouts running until the upgraded server is visible.
+        revision: response
+            .config_revision
+            .unwrap_or_else(|| "unreported".to_string()),
+    })
 }
 
-async fn push_updates(bootstrap: CentralClientBootstrap, updates: mpsc::Sender<()>) {
+async fn push_updates(
+    bootstrap: CentralClientBootstrap,
+    applied_revision: String,
+    updates: mpsc::Sender<()>,
+) {
     loop {
         let result: anyhow::Result<()> = async {
             let (http, _, token) = central_access(&bootstrap).await?;
-            let response = device_headers(http.get(format!(
-                "{}/api/client-events",
-                bootstrap.control_plane_url.trim_end_matches('/')
-            )))
+            let response = device_headers(
+                http.get(format!(
+                    "{}/api/client-events",
+                    bootstrap.control_plane_url.trim_end_matches('/')
+                )),
+                Some(&applied_revision),
+            )
             .bearer_auth(token)
             .send()
             .await?
             .error_for_status()?;
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                if String::from_utf8_lossy(&chunk?).contains("event: config") {
+            let mut stream = response.bytes_stream().eventsource();
+            while let Some(event) = stream.next().await {
+                if event?.event == "config" {
                     let _ = updates.send(()).await;
                 }
             }
@@ -142,6 +186,18 @@ async fn push_updates(bootstrap: CentralClientBootstrap, updates: mpsc::Sender<(
     }
 }
 
+async fn poll_updates(updates: mpsc::Sender<()>) {
+    let mut poll = interval(CONFIG_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    poll.tick().await;
+    loop {
+        poll.tick().await;
+        if updates.send(()).await.is_err() {
+            return;
+        }
+    }
+}
+
 /// Run centrally managed routes and replace them when the assigned document changes.
 pub async fn run_central(bootstrap: CentralClientBootstrap) -> anyhow::Result<()> {
     run_central_with_reporter(bootstrap, None).await
@@ -153,9 +209,10 @@ pub async fn run_central_with_reporter(
     reporter: Option<Arc<dyn Fn(Option<String>) + Send + Sync>>,
 ) -> anyhow::Result<()> {
     let mut retry_delay = INITIAL_RETRY_DELAY;
+    let mut applied_revision: Option<String> = None;
     loop {
-        let configs = match fetch_central(&bootstrap).await {
-            Ok(configs) => configs,
+        let snapshot = match fetch_central_snapshot(&bootstrap, applied_revision.as_deref()).await {
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 tracing::warn!(
                     ?error,
@@ -170,28 +227,36 @@ pub async fn run_central_with_reporter(
                 continue;
             }
         };
-        let fingerprint = match serde_json::to_vec(&configs).context("fingerprint central config") {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    ?retry_delay,
-                    "central configuration is not ready; retrying"
-                );
-                if let Some(reporter) = &reporter {
-                    reporter(Some("Configuration unavailable · retrying".into()));
+        let fingerprint =
+            match serde_json::to_vec(&snapshot.configs).context("fingerprint central config") {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        ?retry_delay,
+                        "central configuration is not ready; retrying"
+                    );
+                    if let Some(reporter) = &reporter {
+                        reporter(Some("Configuration unavailable · retrying".into()));
+                    }
+                    sleep(retry_delay).await;
+                    retry_delay = next_retry_delay(retry_delay);
+                    continue;
                 }
-                sleep(retry_delay).await;
-                retry_delay = next_retry_delay(retry_delay);
-                continue;
-            }
-        };
+            };
+        let active_status = applied_config_status(&snapshot.configs);
+        applied_revision = Some(snapshot.revision.clone());
         if let Some(reporter) = &reporter {
-            reporter(None);
+            reporter(Some(active_status.clone()));
         }
         let (update_sender, mut update_receiver) = mpsc::channel(4);
-        let push_task = tokio::spawn(push_updates(bootstrap.clone(), update_sender));
-        let runtime = crate::run_all(configs);
+        let push_task = tokio::spawn(push_updates(
+            bootstrap.clone(),
+            snapshot.revision.clone(),
+            update_sender.clone(),
+        ));
+        let poll_task = tokio::spawn(poll_updates(update_sender));
+        let runtime = crate::run_all(snapshot.configs);
         tokio::pin!(runtime);
         let mut replace_routes = false;
         loop {
@@ -207,24 +272,28 @@ pub async fn run_central_with_reporter(
                     break;
                 },
                 _ = update_receiver.recv() => {
-                    match fetch_central(&bootstrap).await {
-                        Ok(next) if serde_json::to_vec(&next).context("fingerprint central config")? != fingerprint => {
-                            if let Some(reporter) = &reporter { reporter(None); }
+                    match fetch_central_snapshot(&bootstrap, applied_revision.as_deref()).await {
+                        Ok(next) if next.revision != snapshot.revision
+                            || serde_json::to_vec(&next.configs).context("fingerprint central config")? != fingerprint => {
+                            if let Some(reporter) = &reporter {
+                                reporter(Some("Applying configuration…".into()));
+                            }
                             replace_routes = true;
                             break
                         },
-                        Ok(_) => {
-                            if let Some(reporter) = &reporter { reporter(None); }
-                        }
+                        Ok(_) => {}
                         Err(error) => {
                             tracing::warn!(?error, "central config refresh rejected; retaining active routes");
-                            if let Some(reporter) = &reporter { reporter(Some("Configuration warning".into())); }
+                            if let Some(reporter) = &reporter {
+                                reporter(Some(format!("Configuration warning · {active_status}")));
+                            }
                         },
                     }
                 }
             }
         }
         push_task.abort();
+        poll_task.abort();
         if replace_routes {
             retry_delay = INITIAL_RETRY_DELAY;
             tracing::info!("central configuration changed; replacing active routes");
@@ -232,6 +301,25 @@ pub async fn run_central_with_reporter(
             sleep(retry_delay).await;
             retry_delay = next_retry_delay(retry_delay);
         }
+    }
+}
+
+fn applied_config_status(configs: &[ClientConfig]) -> String {
+    let route_count = configs.len();
+    let backend_count = configs
+        .iter()
+        .map(|config| config.backend_rules.len())
+        .sum::<usize>();
+    let first_backend = configs
+        .iter()
+        .flat_map(|config| &config.backend_rules)
+        .next()
+        .map(|rule| rule.resolved_http_backend_addr());
+    match (backend_count, first_backend) {
+        (0, _) => format!("Applied · {route_count} route(s)"),
+        (1, Some(backend)) => format!("Applied · {backend}"),
+        (_, Some(backend)) => format!("Applied · {route_count} route(s) · {backend} + more"),
+        _ => format!("Applied · {route_count} route(s)"),
     }
 }
 
@@ -251,5 +339,21 @@ mod tests {
         );
         assert_eq!(next_retry_delay(Duration::from_secs(20)), MAX_RETRY_DELAY);
         assert_eq!(next_retry_delay(MAX_RETRY_DELAY), MAX_RETRY_DELAY);
+    }
+
+    #[test]
+    fn applied_status_names_the_active_backend() {
+        let config = parse_client_config_document(
+            r#"
+client_id = "sports"
+nats_url = "nats://localhost:4222"
+
+[[backend_rules]]
+pattern = "sports.example.com"
+backend_addr = "127.0.0.1:6565"
+"#,
+        )
+        .expect("config");
+        assert_eq!(applied_config_status(&config), "Applied · 127.0.0.1:6565");
     }
 }

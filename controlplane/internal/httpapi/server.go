@@ -35,7 +35,9 @@ const (
 	sessionCookie         = "lfp_connect_session"
 	flowCookie            = "lfp_connect_oidc_flow"
 	devicePresenceSubject = "lfp.control.devices.presence"
+	deviceConfigSubject   = "lfp.control.devices.config"
 	deviceOnlineLease     = 45 * time.Second
+	appliedConfigHeader   = "X-LFP-Pipe-Config-Revision"
 )
 
 // Server serves browser authentication and tunnel-token requests.
@@ -54,13 +56,16 @@ type Server struct {
 }
 
 type deviceState struct {
-	Username string    `json:"username"`
-	Name     string    `json:"name"`
-	Version  string    `json:"version"`
-	Platform string    `json:"platform"`
-	LastSeen time.Time `json:"last_seen"`
-	Online   bool      `json:"online"`
-	Known    bool      `json:"presence_known"`
+	Username              string    `json:"username"`
+	Name                  string    `json:"name"`
+	Version               string    `json:"version"`
+	Platform              string    `json:"platform"`
+	AppliedConfigRevision string    `json:"applied_config_revision"`
+	DesiredConfigRevision string    `json:"desired_config_revision"`
+	ConfigSynced          bool      `json:"config_synced"`
+	LastSeen              time.Time `json:"last_seen"`
+	Online                bool      `json:"online"`
+	Known                 bool      `json:"presence_known"`
 }
 
 type deviceRegistry struct {
@@ -142,6 +147,12 @@ func (r *deviceRegistry) notify(username string) {
 		default:
 		}
 	}
+	for updates := range r.presence {
+		select {
+		case updates <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (r *deviceRegistry) subscribePresence() (chan struct{}, func()) {
@@ -204,7 +215,7 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, nc *nat
 		)
 	}
 	if nc != nil {
-		subscription, subscribeErr := nc.Subscribe(devicePresenceSubject, func(message *nats.Msg) {
+		presenceSubscription, subscribeErr := nc.Subscribe(devicePresenceSubject, func(message *nats.Msg) {
 			var device deviceState
 			if json.Unmarshal(message.Data, &device) == nil && device.Username != "" && !device.LastSeen.IsZero() {
 				server.devices.record(device)
@@ -213,13 +224,24 @@ func New(ctx context.Context, cfg config.Config, tickets *ticket.Signer, nc *nat
 		if subscribeErr != nil {
 			return nil, fmt.Errorf("subscribe to managed-client presence: %w", subscribeErr)
 		}
+		configSubscription, subscribeErr := nc.Subscribe(deviceConfigSubject, func(message *nats.Msg) {
+			if username := strings.TrimSpace(string(message.Data)); username != "" {
+				server.devices.notify(username)
+			}
+		})
+		if subscribeErr != nil {
+			_ = presenceSubscription.Unsubscribe()
+			return nil, fmt.Errorf("subscribe to managed-client configuration: %w", subscribeErr)
+		}
 		if flushErr := nc.FlushTimeout(2 * time.Second); flushErr != nil {
-			_ = subscription.Unsubscribe()
+			_ = presenceSubscription.Unsubscribe()
+			_ = configSubscription.Unsubscribe()
 			return nil, fmt.Errorf("activate managed-client presence subscription: %w", flushErr)
 		}
 		go func() {
 			<-ctx.Done()
-			_ = subscription.Unsubscribe()
+			_ = presenceSubscription.Unsubscribe()
+			_ = configSubscription.Unsubscribe()
 		}()
 	}
 	return server, nil
@@ -618,6 +640,11 @@ func (s *Server) putServicePrincipalConfig(w http.ResponseWriter, r *http.Reques
 	}
 	metadata.ConfigTOML = request.ConfigTOML
 	s.devices.notify(user.Username)
+	if s.nats != nil {
+		if err := s.nats.Publish(deviceConfigSubject, []byte(user.Username)); err != nil {
+			s.logger.Warn("managed-client configuration notification could not be published", "error", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"config_toml": metadata.ConfigTOML})
 }
 
@@ -637,7 +664,10 @@ func (s *Server) getMachineClientConfig(w http.ResponseWriter, r *http.Request) 
 		if user.Username == identity.Username {
 			metadata := metadataFromUser(user)
 			if metadata.Managed && metadata.ConfigTOML != "" {
-				writeJSON(w, http.StatusOK, map[string]any{"config_toml": metadata.ConfigTOML, "username": identity.Username})
+				writeJSON(w, http.StatusOK, map[string]any{
+					"config_toml": metadata.ConfigTOML, "config_revision": configRevision(metadata.ConfigTOML),
+					"username": identity.Username,
+				})
 				return
 			}
 		}
@@ -683,10 +713,9 @@ func (s *Server) getMachineClientEvents(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) recordDevicePresence(username string, r *http.Request) {
 	device := s.devices.touch(deviceState{
-		Username: username,
-		Name:     r.Header.Get("X-LFP-Pipe-Device"),
-		Version:  r.Header.Get("X-LFP-Pipe-Version"),
-		Platform: r.Header.Get("X-LFP-Pipe-Platform"),
+		Username: username, Name: r.Header.Get("X-LFP-Pipe-Device"),
+		Version: r.Header.Get("X-LFP-Pipe-Version"), Platform: r.Header.Get("X-LFP-Pipe-Platform"),
+		AppliedConfigRevision: r.Header.Get(appliedConfigHeader),
 	})
 	if s.nats == nil {
 		return
@@ -803,9 +832,12 @@ func (s *Server) ownedManagedClients(ctx context.Context, ownerSubject string) (
 func (s *Server) managedClientStates(owned map[string]authentikapi.User) []deviceState {
 	seen := make(map[string]deviceState)
 	for _, device := range s.devices.list() {
-		if _, ok := owned[device.Username]; ok {
+		if user, ok := owned[device.Username]; ok {
 			device.Online = time.Since(device.LastSeen) < deviceOnlineLease
 			device.Known = true
+			metadata := metadataFromUser(user)
+			device.DesiredConfigRevision = configRevision(metadata.ConfigTOML)
+			device.ConfigSynced = device.AppliedConfigRevision != "" && device.AppliedConfigRevision == device.DesiredConfigRevision
 			seen[device.Username] = device
 		}
 	}
@@ -814,11 +846,20 @@ func (s *Server) managedClientStates(owned map[string]authentikapi.User) []devic
 		if device, ok := seen[username]; ok {
 			clients = append(clients, device)
 		} else {
-			clients = append(clients, deviceState{Username: username, Name: user.Name, Known: false})
+			metadata := metadataFromUser(user)
+			clients = append(clients, deviceState{
+				Username: username, Name: user.Name, Known: false,
+				DesiredConfigRevision: configRevision(metadata.ConfigTOML),
+			})
 		}
 	}
 	sort.Slice(clients, func(left, right int) bool { return clients[left].Username < clients[right].Username })
 	return clients
+}
+
+func configRevision(configTOML string) string {
+	digest := sha256.Sum256([]byte(configTOML))
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *Server) createEnrollment(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,28 @@
+services:
+  lfp-pipe-client:
+    image: ${CLIENT_IMAGE:-lfp-pipe-client:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LFP_PIPE_CONFIG: /etc/lfp-pipe/client.toml
+      LFP_PIPE_TRAY: never
+      LFP_PIPE_OAUTH_USERNAME_FILE: /run/secrets/lfp_pipe_oauth_username
+      LFP_PIPE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/lfp_pipe_oauth_client_secret
+    volumes:
+      - ./client.toml:/etc/lfp-pipe/client.toml:ro
+      - lfp-pipe-client-cache:/home/lfp/.cache/lfp-pipe
+    secrets:
+      - lfp_pipe_oauth_username
+      - lfp_pipe_oauth_client_secret
+
+volumes:
+  lfp-pipe-client-cache:
+
+secrets:
+  lfp_pipe_oauth_username:
+    external: true
+  lfp_pipe_oauth_client_secret:
+    external: true

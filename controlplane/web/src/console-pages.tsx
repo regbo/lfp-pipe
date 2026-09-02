@@ -24,7 +24,7 @@ import type {
   RouteSummary,
   ServicePrincipal,
 } from "./console-model";
-import { lastSeen } from "./console-model";
+import { clientStatus, lastSeen } from "./console-model";
 import { linkHref } from "./link-utils";
 
 export function PageHeader({ title, description, actions }: { title: string; description: string; actions?: ReactNode }) {
@@ -42,8 +42,8 @@ export function AddMenu({ onCreate }: { onCreate: (mode: Exclude<CreationMode, n
 }
 
 export function Status({ client }: { client: ManagedClient }) {
-  const label = !client.presence_known ? "Checking" : client.online ? "Connected" : "Offline";
-  const tone = !client.presence_known ? "checking" : client.online ? "online" : "offline";
+  const label = clientStatus(client);
+  const tone = !client.presence_known || (client.online && !client.config_synced) ? "checking" : client.online ? "online" : "offline";
   return <span className={`status status-${tone}`}><span aria-hidden="true" />{label}</span>;
 }
 
@@ -129,7 +129,7 @@ type MachineDetailProps = {
 
 export function MachineDetail({ client, principal, identity, loading, dirty, saving, children, onBack, onSave, onExport, onDelete }: MachineDetailProps) {
   const title = client?.name || principal?.name || principal?.client_id || client?.username || "Machine";
-  const presence = !client?.presence_known ? "Checking connection" : client.online ? "Connected" : `Last seen ${lastSeen(client)}`;
+  const presence = client ? (client.online ? clientStatus(client) : `Last seen ${lastSeen(client)}`) : "Checking connection";
   const description = client
     ? `${client.platform || "Unknown platform"} · ${client.version || "Unknown version"} · ${presence}`
     : `Client configuration · ${principal?.entitlement || identity.required_entitlement}`;

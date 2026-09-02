@@ -55,7 +55,8 @@ const principals = [demoPrincipal];
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 const bearer = (request: Request) => request.headers.get("authorization") ?? "";
-const managedClients = () => ({ managed_clients: demoLastSeen ? [{ username: demoUsername, ...demoDevice, last_seen: new Date(demoLastSeen).toISOString(), online: Date.now() - demoLastSeen < 45000, presence_known: true }] : [{ username: demoUsername, ...demoDevice, last_seen: "", online: false, presence_known: false }] });
+const configState = { applied_config_revision: "demo", desired_config_revision: "demo", config_synced: true };
+const managedClients = () => ({ managed_clients: demoLastSeen ? [{ username: demoUsername, ...demoDevice, ...configState, last_seen: new Date(demoLastSeen).toISOString(), online: Date.now() - demoLastSeen < 45000, presence_known: true }] : [{ username: demoUsername, ...demoDevice, ...configState, last_seen: "", online: false, presence_known: false }] });
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -75,7 +76,7 @@ Bun.serve({
     if (url.pathname === "/api/managed-client-events") {
       let timer: ReturnType<typeof setInterval>;
       let connectTimer: ReturnType<typeof setTimeout>;
-      const stream = new ReadableStream<Uint8Array>({ start(controller) { const send = (payload: object) => controller.enqueue(encoder.encode(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`)); const online = () => ({ managed_clients: [{ username: demoUsername, ...demoDevice, last_seen: new Date().toISOString(), online: true, presence_known: true }] }); send(managedClients()); connectTimer = setTimeout(() => send(online()), 2000); timer = setInterval(() => send(online()), 5000); }, cancel() { clearTimeout(connectTimer); clearInterval(timer); } });
+      const stream = new ReadableStream<Uint8Array>({ start(controller) { const send = (payload: object) => controller.enqueue(encoder.encode(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`)); const online = () => ({ managed_clients: [{ username: demoUsername, ...demoDevice, ...configState, last_seen: new Date().toISOString(), online: true, presence_known: true }] }); send(managedClients()); connectTimer = setTimeout(() => send(online()), 2000); timer = setInterval(() => send(online()), 5000); }, cancel() { clearTimeout(connectTimer); clearInterval(timer); } });
       return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
     if (url.pathname === "/api/enrollments") return json({ enrollments: [] });

@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.14"
+version = "0.1.20"
 edition = "2024"
 autobins = false
 
@@ -30,6 +30,7 @@ base64.workspace = true
 bytes.workspace = true
 cookie.workspace = true
 constant_time_eq.workspace = true
+eventsource-stream.workspace = true
 futures.workspace = true
 http-body-util.workspace = true
 httparse.workspace = true

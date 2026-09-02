@@ -75,6 +75,9 @@ export type ManagedClient = {
   name: string;
   version: string;
   platform: string;
+  applied_config_revision: string;
+  desired_config_revision: string;
+  config_synced: boolean;
   last_seen: string;
   online: boolean;
   presence_known: boolean;
@@ -187,9 +190,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function lastSeen(client: ManagedClient) {
   if (!client.presence_known) return "Checking";
-  if (client.online) return "Connected";
+  if (client.online) return "Now";
   if (!client.last_seen) return "Never";
   const value = new Date(client.last_seen);
   if (Number.isNaN(value.getTime())) return client.last_seen;
   return value.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+export function clientStatus(client: ManagedClient) {
+  if (!client.presence_known) return "Checking";
+  if (!client.online) return "Offline";
+  return client.config_synced ? "Connected" : "Updating configuration";
 }

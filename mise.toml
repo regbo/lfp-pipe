@@ -85,51 +85,10 @@ run = [
 ]
 
 [tasks."version:bump"]
-description = "Create the next annotated semantic-version tag"
+description = "Build local x64 assets and publish the next semantic-version release"
 usage = '''
 arg "<level>" help="Version component to increment: patch, minor, or major" default="patch"
 flag "--push" help="Push the new tag to origin after creating it"
 '''
-run = '''
-set -eu
-
-level="${usage_level:-patch}"
-case "$level" in
-  patch|minor|major) ;;
-  *) echo "level must be patch, minor, or major" >&2; exit 2 ;;
-esac
-
-if [ -n "$(git status --porcelain)" ]; then
-  echo "refusing to tag a dirty worktree" >&2
-  exit 1
-fi
-
-current="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
-current="${current:-v0.0.0}"
-version="${current#v}"
-major="${version%%.*}"
-remainder="${version#*.}"
-minor="${remainder%%.*}"
-patch="${remainder#*.}"
-
-case "$level" in
-  major) major=$((major + 1)); minor=0; patch=0 ;;
-  minor) minor=$((minor + 1)); patch=0 ;;
-  patch) patch=$((patch + 1)) ;;
-esac
-
-next="v${major}.${minor}.${patch}"
-if git rev-parse --verify --quiet "refs/tags/$next" >/dev/null; then
-  echo "tag already exists: $next" >&2
-  exit 1
-fi
-
-git tag -a "$next" -m "Release $next"
-echo "created $next from $current"
-if [ "${usage_push:-false}" = "true" ]; then
-  git push origin "$next"
-else
-  echo "push with: git push origin $next"
-fi
-'''
+run = "./tools/version-bump.sh"
 run_windows = "pwsh -NoLogo -NoProfile -File ./tools/version-bump.ps1"

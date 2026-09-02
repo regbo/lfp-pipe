@@ -4,9 +4,14 @@
 //! environment variable. Optional values are then layered over the TOML file,
 //! giving the project one explicit precedence order:
 //!
-//! `CLI flag > environment variable > TOML file > typed default`.
+//! `CLI flag > environment variable > environment variable file > TOML file > typed default`.
 
-use std::path::PathBuf;
+use std::{
+    env,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Context;
 use clap::{Args, Parser};
@@ -18,6 +23,57 @@ use crate::{
     },
     logging::DEFAULT_LOG_FILTER,
 };
+
+const FILE_BACKED_ENVIRONMENT: &[&str] = &[
+    "LFP_PIPE_CONFIG",
+    "RUST_LOG",
+    "LFP_PIPE_PUBLIC_LISTEN",
+    "LFP_PIPE_DATA_LISTEN",
+    "LFP_PIPE_ADVERTISED_DATA_ADDR",
+    "LFP_PIPE_NATS_URL",
+    "LFP_PIPE_NATS_TOKEN_FILE",
+    "LFP_PIPE_RELAY_MODE",
+    "LFP_PIPE_REQUEST_SUBJECT",
+    "LFP_PIPE_DOMAIN_SUBJECT_ROUTING",
+    "LFP_PIPE_CLAIM_TIMEOUT_MS",
+    "LFP_PIPE_PENDING_TIMEOUT_MS",
+    "LFP_PIPE_CLIENT_ID",
+    "LFP_PIPE_CLAIM_ACK_TIMEOUT_MS",
+    "LFP_PIPE_TRAY",
+    "LFP_PIPE_OAUTH_USERNAME",
+    "LFP_PIPE_OAUTH_CLIENT_SECRET_FILE",
+];
+
+fn load_file_backed_value(
+    name: &str,
+    direct: Option<OsString>,
+    file_path: Option<OsString>,
+) -> anyhow::Result<Option<OsString>> {
+    if direct.is_some() {
+        return Ok(direct);
+    }
+    let Some(file_path) = file_path else {
+        return Ok(None);
+    };
+    let path = Path::new(&file_path);
+    let value = fs::read_to_string(path)
+        .with_context(|| format!("read {name}_FILE from {}", path.display()))?;
+    Ok(Some(OsString::from(value.trim_end_matches(['\r', '\n']))))
+}
+
+fn hydrate_file_backed_environment() -> anyhow::Result<()> {
+    for name in FILE_BACKED_ENVIRONMENT {
+        let file_name = format!("{name}_FILE");
+        if let Some(value) =
+            load_file_backed_value(name, env::var_os(name), env::var_os(&file_name))?
+        {
+            // Runtime parsing happens in main before any worker threads start,
+            // so no other thread can concurrently read or mutate the process environment.
+            unsafe { env::set_var(name, value) };
+        }
+    }
+    Ok(())
+}
 
 /// Configuration and logging values needed to launch a component.
 #[derive(Debug)]
@@ -255,21 +311,26 @@ impl ClientCli {
 
 /// Parse and layer server configuration from CLI flags, environment, and TOML.
 pub fn parse_server_runtime() -> anyhow::Result<RuntimeConfig<ServerConfig>> {
+    hydrate_file_backed_environment()?;
     ServerCli::parse().load()
 }
 
 /// Parse and layer client configuration from CLI flags, environment, and TOML.
 pub fn parse_client_runtime() -> anyhow::Result<ClientRuntimeConfig> {
+    hydrate_file_backed_environment()?;
     ClientCli::parse().load()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::{
+        ffi::{OsStr, OsString},
+        fs,
+    };
 
     use clap::CommandFactory;
 
-    use super::{ClientCli, ServerCli};
+    use super::{ClientCli, ServerCli, load_file_backed_value};
 
     #[test]
     fn server_help_exposes_flags_and_environment_variables() {
@@ -294,5 +355,37 @@ mod tests {
         assert!(help.contains("LFP_PIPE_RELAY_MODE"));
         assert!(help.contains("--tray"));
         assert!(help.contains("LFP_PIPE_TRAY"));
+    }
+
+    #[test]
+    fn direct_environment_value_precedes_file_value() {
+        let value = load_file_backed_value(
+            "LFP_PIPE_CLIENT_ID",
+            Some(OsString::from("direct")),
+            Some(OsString::from("missing-file")),
+        )
+        .expect("direct value");
+        assert_eq!(value, Some(OsString::from("direct")));
+    }
+
+    #[test]
+    fn file_backed_environment_trims_only_line_endings() {
+        let path = std::env::temp_dir().join(format!(
+            "lfp-pipe-env-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::write(&path, " value with spaces \r\n").expect("write environment file");
+        let value = load_file_backed_value(
+            "LFP_PIPE_CLIENT_ID",
+            None,
+            Some(path.clone().into_os_string()),
+        )
+        .expect("file value");
+        let _ = fs::remove_file(path);
+        assert_eq!(value, Some(OsString::from(" value with spaces ")));
     }
 }

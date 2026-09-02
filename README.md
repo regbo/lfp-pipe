@@ -93,7 +93,7 @@ loopback port `8080`, and the example route is `wsl.regbodesktop.local`.
 Configuration is layered predictably:
 
 ```text
-CLI flag > environment variable > TOML file > typed default
+CLI flag > environment variable > environment variable file > TOML file > typed default
 ```
 
 Desktop installs do not require a configuration file. Starting the client with
@@ -104,8 +104,10 @@ entitlement. The resulting Authentik service-account credential is stored in
 the operating-system user configuration directory. From then on the client
 starts at login, appears in the management console, and receives configuration
 updates over an authenticated Server-Sent Events stream on the same HTTPS
-origin. SSE is used instead of gRPC so pushes work through ordinary HTTP reverse
-proxies and path routing without requiring a separate HTTP/2 service.
+origin. Replicas broadcast changes over NATS, and clients also poll as a bounded
+fallback if a stream or proxy misses a notification. SSE is used instead of
+gRPC so pushes work through ordinary HTTP reverse proxies and path routing
+without requiring a separate HTTP/2 service.
 
 TOML files, environment variables, and CLI flags remain available for headless
 servers, service supervisors, and automation. Supplying `--config` or
@@ -113,6 +115,14 @@ servers, service supervisors, and automation. Supplying `--config` or
 
 Both programs accept `--config` / `LFP_PIPE_CONFIG` and `--log-filter` /
 `RUST_LOG`. Server overrides use these environment variables:
+
+Every accepted environment setting can instead be read from a mounted file by
+appending `_FILE` to its name. For example,
+`LFP_PIPE_OAUTH_USERNAME_FILE=/run/secrets/lfp_pipe_oauth_username` reads the
+username from that Docker secret. A direct environment value wins when both are
+set. Settings whose names already end in `_FILE` keep their existing path
+semantics; append another `_FILE` only when the path value itself must come from
+a mounted file.
 
 | Flag | Environment variable |
 | --- | --- |
@@ -353,11 +363,15 @@ half-closes, and fallback behavior.
 
 ## Releases
 
-Pushing a semantic version tag such as `v1.2.3` runs the tagged-release matrix
-for Linux x86-64/ARM64, Windows x86-64/ARM64, and macOS Intel/Apple Silicon.
-Each platform is tested natively, packaged with both binaries, checksummed, and
-attached to a GitHub release. Each archive has a conventional `bin/` directory
-that mise's GitHub backend discovers after extraction.
+Publishing a semantic version release such as `v1.2.3` runs the tagged-release
+matrix for any platform assets that were not built locally. On Windows,
+`version:bump` tests and packages Windows x86-64 natively and Linux x86-64 in
+Docker before publishing the release. GitHub Actions normally handles only
+Linux ARM64, Windows ARM64, and macOS Intel/Apple Silicon; if a local asset is
+absent, the generated matrix adds that target automatically. Every archive has
+a conventional `bin/` directory that mise's GitHub backend discovers after
+extraction, and the final Actions job publishes checksums covering local and
+hosted builds together.
 
 Install both binaries from the latest compatible GitHub release:
 
@@ -377,7 +391,7 @@ For an ephemeral pinned invocation, use:
 mise exec github:regbo/lfp-pipe@0.1.1 -- lfp-pipe-server --version
 ```
 
-Create the next tag from a clean worktree with:
+Build local assets and create the next tag from a clean worktree with:
 
 ```text
 mise run version:bump patch
@@ -385,8 +399,16 @@ mise run version:bump minor --push
 mise run version:bump major
 ```
 
+Pass `--push` to upload the local assets, publish the GitHub release, and start
+the missing-target Actions matrix. A plain bump leaves the tag and assets local
+for inspection.
+
 ## Deployment
 
+- [`Dockerfile.client`](Dockerfile.client) and
+  [`client.container.example.yml`](client.container.example.yml) provide a
+  headless client image and a host-network Compose example. Host networking
+  preserves loopback backend addresses such as `127.0.0.1:6565`.
 - [`deploy/swarm01/README.md`](deploy/swarm01/README.md) documents the public
   native systemd server.
 - [`deploy/swarm/README.md`](deploy/swarm/README.md) documents the Authentik,
