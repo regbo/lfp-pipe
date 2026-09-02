@@ -8,6 +8,7 @@ RUN apt-get update \
         libxdo-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
+COPY client.multi.example.toml client.authorization.example.toml ./
 COPY shared ./shared
 COPY server ./server
 COPY client ./client
