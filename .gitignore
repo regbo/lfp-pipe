@@ -1,4 +1,5 @@
 target/
+/dist/
 controlplane/web/node_modules/
 controlplane/web/dist/
 *.log

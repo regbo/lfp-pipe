@@ -48,7 +48,7 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         shell: bash
@@ -96,7 +96,7 @@ jobs:
           Remove-Item -Recurse -Force "dist/$archive"
 
       - name: Upload release archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*
@@ -111,7 +111,7 @@ jobs:
       contents: write
     steps:
       - name: Download Actions-built archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: actions-release
