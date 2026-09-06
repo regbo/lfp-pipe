@@ -114,7 +114,7 @@ services:
         order: start-first
         failure_action: rollback
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
   web:
@@ -123,23 +123,24 @@ services:
       - control
       - traefik-public
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 15s
       timeout: 5s
       retries: 6
       start_period: 15s
     logging: *default-logging
     deploy:
-      replicas: 2
+      replicas: 3
       placement:
         constraints:
           - node.role == manager
+        max_replicas_per_node: 1
       update_config:
         parallelism: 1
         order: start-first
         failure_action: rollback
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
       labels:
         - traefik.enable=true
@@ -184,7 +185,7 @@ services:
         order: stop-first
         failure_action: rollback
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
       labels:
         - traefik.enable=true
