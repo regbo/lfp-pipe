@@ -36,11 +36,10 @@ services:
       start_period: 15s
     logging: *default-logging
     deploy:
-      replicas: 3
+      mode: global
       placement:
         constraints:
           - node.role == manager
-        max_replicas_per_node: 1
       update_config:
         parallelism: 1
         order: stop-first
@@ -105,7 +104,7 @@ services:
       start_period: 20s
     logging: *default-logging
     deploy:
-      replicas: 2
+      mode: global
       placement:
         constraints:
           - node.role == manager

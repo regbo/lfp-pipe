@@ -26,13 +26,14 @@ services:
         protocol: tcp
         mode: ingress
     deploy:
-      replicas: 3
+      mode: global
       placement:
-        max_replicas_per_node: 1
+        constraints:
+          - node.role == manager
       update_config:
         order: start-first
       restart_policy:
-        condition: on-failure
+        condition: any
 
   auth:
     image: ${LFP_AUTH_IMAGE:-lfp-connect-auth:latest}
@@ -74,11 +75,14 @@ services:
       - nats_internal_ingress_token
     networks: [control]
     deploy:
-      replicas: 2
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
       update_config:
         order: start-first
       restart_policy:
-        condition: on-failure
+        condition: any
 
   web:
     image: ${LFP_WEB_IMAGE:-lfp-connect-web:latest}
@@ -89,9 +93,14 @@ services:
         protocol: tcp
         mode: ingress
     deploy:
-      replicas: 2
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
       update_config:
         order: start-first
+      restart_policy:
+        condition: any
 
   lfp-ingress:
     image: ${LFP_INGRESS_IMAGE:-lfp-pipe-ingress:latest}
@@ -124,7 +133,7 @@ services:
         order: stop-first
         failure_action: rollback
       restart_policy:
-        condition: on-failure
+        condition: any
 
 networks:
   control:
