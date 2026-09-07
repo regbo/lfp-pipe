@@ -1,3 +1,4 @@
+# Standalone ingress for the LibreSpeed route.
 public_listen = "0.0.0.0:7443"
 data_listen = "0.0.0.0:7001"
 advertised_data_addr = "198.23.156.92:7001"
@@ -7,3 +8,7 @@ relay_mode = "auto"
 request_subject = "tunnel.connect.request.librespeed"
 claim_timeout_ms = 3000
 pending_timeout_ms = 10000
+ingress_handshake_timeout_ms = 15000
+callback_handshake_timeout_ms = 15000
+max_ingress_connections = 0
+max_callback_handshakes = 0

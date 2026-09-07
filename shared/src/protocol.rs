@@ -10,7 +10,7 @@ pub struct ConnectionRequest {
     pub connection_id: String,
     /// HTTP Host or TLS SNI, or `None` for default/raw TCP routing.
     pub hostname: Option<String>,
-    /// Public ingress peer IP, supplied by the trusted tunnel server.
+    /// Public ingress peer IP, supplied by the trusted ingress.
     #[serde(default)]
     pub client_ip: Option<String>,
     /// Whether the public ingress connection used TLS.
@@ -18,8 +18,11 @@ pub struct ConnectionRequest {
     pub tls: bool,
     /// Per-request NATS inbox on which clients submit claims.
     pub reply_subject: String,
-    /// Public callback/data address the winning client must dial.
-    pub server_data_addr: String,
+    /// Public callback address on the accepting ingress that the winner must dial.
+    ///
+    /// Protocol v1 retains its original JSON key for rolling-upgrade compatibility.
+    #[serde(rename = "server_data_addr")]
+    pub ingress_callback_addr: String,
     /// Claim deadline expressed as Unix epoch milliseconds.
     pub deadline_unix_ms: u64,
 }
@@ -58,15 +61,21 @@ pub fn decode_json<T: for<'de> Deserialize<'de>>(payload: &[u8]) -> anyhow::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionRequest, decode_json};
+    use super::{ConnectionRequest, decode_json, encode_json};
 
     #[test]
-    fn older_servers_default_new_ingress_metadata() {
+    fn older_ingresses_default_new_ingress_metadata() {
         let request: ConnectionRequest = decode_json(
-            br#"{"connection_id":"one","hostname":"example.com","reply_subject":"reply","server_data_addr":"server:7001","deadline_unix_ms":1}"#,
+            br#"{"connection_id":"one","hostname":"example.com","reply_subject":"reply","server_data_addr":"ingress:7001","deadline_unix_ms":1}"#,
         )
         .expect("legacy connection request");
         assert_eq!(request.client_ip, None);
         assert!(!request.tls);
+        assert_eq!(request.ingress_callback_addr, "ingress:7001");
+
+        let encoded = encode_json(&request).expect("encode request");
+        let encoded = std::str::from_utf8(&encoded).expect("request JSON");
+        assert!(encoded.contains("\"server_data_addr\":\"ingress:7001\""));
+        assert!(!encoded.contains("ingress_callback_addr"));
     }
 }

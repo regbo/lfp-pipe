@@ -46,7 +46,7 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
   cargo build --workspace --release --locked --target "$target"
   archive="lfp-pipe-$next-$target"
   mkdir -p "$release_root/$archive/bin"
-  cp "target/$target/release/lfp-pipe-server" "target/$target/release/lfp-pipe-client" "$release_root/$archive/bin/"
+  cp "target/$target/release/lfp-pipe-ingress" "target/$target/release/lfp-pipe-client" "$release_root/$archive/bin/"
   tar -C "$release_root" -czf "$release_root/$archive.tar.gz" "$archive"
   rm -rf -- "$release_root/$archive"
   assets+=("$release_root/$archive.tar.gz")

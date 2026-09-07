@@ -2,7 +2,7 @@ FROM rust:1.93-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY shared ./shared
-COPY server ./server
+COPY ingress ./ingress
 COPY client ./client
 RUN cargo build --locked --release -p client --no-default-features
 

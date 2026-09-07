@@ -33,7 +33,7 @@ func TestTunnelTicketProducesExactRoutePermissions(t *testing.T) {
 		AllowedRouteSuffix:       "subdomain.domain",
 		NATSTunnelAccount:        "TUNNELS",
 		NATSRequestSubjectPrefix: "lfp.v1.connect",
-		NATSInternalServerToken:  "internal-only",
+		NATSInternalIngressToken: "internal-only",
 	}
 	encoded, err := authorize(&jwt.AuthorizationRequest{
 		UserNkey:       userPublic,
@@ -65,7 +65,7 @@ func TestInternalServerTokenGetsPublisherPermissions(t *testing.T) {
 	cfg := config.Config{
 		NATSTunnelAccount:        "TUNNELS",
 		NATSRequestSubjectPrefix: "lfp.v1.connect",
-		NATSInternalServerToken:  "internal-only",
+		NATSInternalIngressToken: "internal-only",
 	}
 	encoded, err := authorize(&jwt.AuthorizationRequest{
 		UserNkey:       userPublic,

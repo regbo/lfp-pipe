@@ -2,12 +2,12 @@ FROM rust:1.93-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY shared ./shared
-COPY server ./server
+COPY ingress ./ingress
 COPY client ./client
-RUN cargo build --locked --release -p server
+RUN cargo build --locked --release -p ingress
 
 FROM debian:bookworm-slim
 RUN useradd --system --create-home --uid 10001 lfp
-COPY --from=build /src/target/release/lfp-pipe-server /usr/local/bin/lfp-pipe-server
+COPY --from=build /src/target/release/lfp-pipe-ingress /usr/local/bin/lfp-pipe-ingress
 USER lfp
-ENTRYPOINT ["/usr/local/bin/lfp-pipe-server"]
+ENTRYPOINT ["/usr/local/bin/lfp-pipe-ingress"]

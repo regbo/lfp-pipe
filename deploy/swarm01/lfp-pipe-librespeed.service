@@ -1,5 +1,5 @@
 [Unit]
-Description=lfp-pipe public server for LFPConnect LibreSpeed
+Description=lfp-pipe ingress for LFPConnect LibreSpeed
 Wants=network-online.target
 After=network-online.target
 
@@ -7,7 +7,7 @@ After=network-online.target
 Type=simple
 DynamicUser=true
 EnvironmentFile=-/etc/lfp-pipe/lfp-pipe.env
-ExecStart=/opt/lfp-pipe/bin/lfp-pipe-server --config /etc/lfp-pipe/librespeed-server.toml
+ExecStart=/opt/lfp-pipe/bin/lfp-pipe-ingress --config /etc/lfp-pipe/librespeed-ingress.toml
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=true

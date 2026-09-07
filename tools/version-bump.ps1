@@ -46,7 +46,7 @@ $windowsArchive = "lfp-pipe-$next-$windowsTarget"
 $windowsDirectory = Join-Path $releaseRoot $windowsArchive
 $windowsBin = Join-Path $windowsDirectory "bin"
 New-Item -ItemType Directory -Force -Path $windowsBin | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot "target\$windowsTarget\release\lfp-pipe-server.exe") -Destination $windowsBin
+Copy-Item -LiteralPath (Join-Path $repoRoot "target\$windowsTarget\release\lfp-pipe-ingress.exe") -Destination $windowsBin
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$windowsTarget\release\lfp-pipe-client.exe") -Destination $windowsBin
 $windowsAsset = Join-Path $releaseRoot "$windowsArchive.zip"
 Compress-Archive -Path $windowsDirectory -DestinationPath $windowsAsset

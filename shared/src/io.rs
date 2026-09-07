@@ -137,8 +137,8 @@ async fn probe_splice_relay() -> anyhow::Result<()> {
     let mut right_peer = right_connect?;
     let (mut right_relay, _) = right_accept?;
 
-    // Match the real relay state: routing peeks at ingress, while the server
-    // consumes a prefix from the callback socket before forwarding begins.
+    // Match the real relay state: routing peeks at the public socket, while
+    // callback pairing consumes a prefix before forwarding begins.
     right_peer.write_all(PREFIX).await?;
     let mut prefix = vec![0; PREFIX.len()];
     right_relay.read_exact(&mut prefix).await?;

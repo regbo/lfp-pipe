@@ -1,14 +1,14 @@
 [package]
-name = "server"
+name = "ingress"
 version = "0.1.22"
 edition = "2024"
 autobins = false
 
 [lib]
-name = "server"
+name = "ingress"
 
 [[bin]]
-name = "lfp-pipe-server"
+name = "lfp-pipe-ingress"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,26 +1,26 @@
 # LFP Connect Swarm control plane
 
 This stack runs a three-replica Core NATS cluster, the Go Authentik/NATS Auth
-Callout service, the Bun-built web console, and one public `lfp-pipe-server` on
+Callout service, the Bun-built web console, and one `lfp-pipe-ingress` on
 each manager.
 Tunnel payloads continue to flow directly through `lfp-pipe`; NATS remains the
 control plane.
 
 ## Node-local data path
 
-The server is a global, manager-constrained service. Ports 7443 and 7001 use
+The ingress is a global, manager-constrained service. Ports 7443 and 7001 use
 host publishing, and each task advertises
 `{{.Node.Hostname}}.<LFP_NODE_DOMAIN>:7001`. Create an A record for every
 manager hostname and point the route wildcard at the same manager addresses.
 
 Use `http://<route>:7443` (or TLS with the same explicit port) for the direct
-path. It lands on the selected manager's local server and avoids both Traefik
+path. It lands on the selected manager's local ingress and avoids both Traefik
 and the Swarm overlay for payload bytes. The normal port 80/443 edge route may
-remain as a compatibility path, but Traefik can choose any server task and is
+remain as a compatibility path, but Traefik can choose any ingress task and is
 not guaranteed to stay node-local.
 
 Only one host-mode task can own these ports on a manager. Retire any native
-`lfp-pipe-server` service using 7443 or 7001 before deploying the global Swarm
+`lfp-pipe-ingress` service using 7443 or 7001 before deploying the global Swarm
 service.
 
 ## Authorization model
@@ -46,7 +46,7 @@ publish:   one response to a received request
 ```
 
 Multiple clients can receive credentials for the same route. They all submit a
-claim and the public server keeps its existing round-robin winner selection.
+claim and the ingress keeps its existing round-robin winner selection.
 
 ## Authentik application
 
@@ -114,13 +114,13 @@ openssl rand -base64 36 | docker secret create nats_callout_password -
 openssl rand -base64 36 | docker secret create nats_system_password -
 docker secret create nats_auth_issuer_seed ~/.secrets/nats/lfp-connect/auth-issuer-seed
 docker secret create nats_auth_xkey_seed ~/.secrets/nats/lfp-connect/auth-xkey-seed
-openssl rand -base64 48 | docker secret create nats_internal_server_token -
+openssl rand -base64 48 | docker secret create nats_internal_ingress_token -
 ```
 
 Use restrictive permissions on every source file. The stack mounts secrets
 under `/run/secrets`; no secret value is declared in the stack environment.
 NATS reads its password files in the container entrypoint immediately before
-starting the server.
+starting the ingress.
 
 ## Build and deploy
 
@@ -130,10 +130,10 @@ every node:
 ```sh
 docker build -t registry.example.com/lfp-connect-auth:latest ./controlplane
 docker build -t registry.example.com/lfp-connect-web:latest ./controlplane/web
-docker build -f Dockerfile.server -t registry.example.com/lfp-pipe-server:latest .
+docker build -f Dockerfile.ingress -t registry.example.com/lfp-pipe-ingress:latest .
 docker push registry.example.com/lfp-connect-auth:latest
 docker push registry.example.com/lfp-connect-web:latest
-docker push registry.example.com/lfp-pipe-server:latest
+docker push registry.example.com/lfp-pipe-ingress:latest
 ```
 
 Copy `.env.example` to a protected deployment environment file, set its public

@@ -1,4 +1,4 @@
-//! NATS connection setup shared by the public server and private client.
+//! NATS connection setup shared by the ingress and private client.
 
 use std::fs;
 

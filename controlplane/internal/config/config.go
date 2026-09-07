@@ -36,7 +36,7 @@ type Config struct {
 	NATSCalloutPassword      string
 	NATSAuthIssuerSeed       []byte
 	NATSAuthXKeySeed         []byte
-	NATSInternalServerToken  string
+	NATSInternalIngressToken string
 	NATSTunnelAccount        string
 	NATSRequestSubjectPrefix string
 	Brand                    BrandConfig
@@ -122,7 +122,7 @@ func LoadArgs(args []string) (Config, error) {
 	if cfg.NATSAuthIssuerSeed, err = readSecret("LFP_AUTH_NATS_ISSUER_SEED_FILE"); err != nil {
 		return Config{}, err
 	}
-	if cfg.NATSInternalServerToken, err = readSecretString("LFP_AUTH_NATS_INTERNAL_SERVER_TOKEN_FILE"); err != nil {
+	if cfg.NATSInternalIngressToken, err = readSecretString("LFP_AUTH_NATS_INTERNAL_INGRESS_TOKEN_FILE"); err != nil {
 		return Config{}, err
 	}
 	if path := os.Getenv("LFP_AUTH_NATS_XKEY_SEED_FILE"); path != "" {
@@ -144,8 +144,8 @@ func LoadArgs(args []string) (Config, error) {
 	if len(cfg.CookieSecret) < 32 || len(cfg.TicketSecret) < 32 {
 		return Config{}, errors.New("cookie and ticket secrets must each contain at least 32 bytes")
 	}
-	if cfg.OIDCClientSecret == "" || cfg.AuthentikAPIToken == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalServerToken == "" {
-		return Config{}, errors.New("OIDC, Authentik API, NATS callout, issuer, and internal server secrets must not be empty")
+	if cfg.OIDCClientSecret == "" || cfg.AuthentikAPIToken == "" || cfg.NATSCalloutPassword == "" || len(cfg.NATSAuthIssuerSeed) == 0 || cfg.NATSInternalIngressToken == "" {
+		return Config{}, errors.New("OIDC, Authentik API, NATS callout, issuer, and internal ingress secrets must not be empty")
 	}
 	if cfg.Brand.Name == "" || cfg.Brand.LogoURL == "" || cfg.Brand.Wordmark == "" || cfg.Brand.FaviconURL == "" {
 		return Config{}, errors.New("brand name, logo URL, wordmark, and favicon URL must not be empty")

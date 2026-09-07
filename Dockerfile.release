@@ -10,13 +10,13 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY client.multi.example.toml client.authorization.example.toml ./
 COPY shared ./shared
-COPY server ./server
+COPY ingress ./ingress
 COPY client ./client
 RUN cargo test --workspace --release --locked --target x86_64-unknown-linux-gnu \
     && cargo build --workspace --release --locked --target x86_64-unknown-linux-gnu
 RUN archive="lfp-pipe-${RELEASE_TAG}-x86_64-unknown-linux-gnu" \
     && mkdir -p "/out/${archive}/bin" \
-    && cp target/x86_64-unknown-linux-gnu/release/lfp-pipe-server "/out/${archive}/bin/" \
+    && cp target/x86_64-unknown-linux-gnu/release/lfp-pipe-ingress "/out/${archive}/bin/" \
     && cp target/x86_64-unknown-linux-gnu/release/lfp-pipe-client "/out/${archive}/bin/" \
     && tar -C /out -czf "/out/${archive}.tar.gz" "${archive}" \
     && rm -rf "/out/${archive}"

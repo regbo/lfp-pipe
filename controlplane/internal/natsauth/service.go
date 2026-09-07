@@ -107,10 +107,10 @@ func (s *Service) Close() error {
 
 func authorize(req *jwt.AuthorizationRequest, cfg config.Config, tickets *ticket.Signer, issuer nkeys.KeyPair) (string, error) {
 	provided := []byte(req.ConnectOptions.Token)
-	expected := []byte(cfg.NATSInternalServerToken)
+	expected := []byte(cfg.NATSInternalIngressToken)
 	if len(provided) == len(expected) && subtle.ConstantTimeCompare(provided, expected) == 1 {
 		claims := jwt.NewUserClaims(req.UserNkey)
-		claims.Name = "lfp-pipe-server"
+		claims.Name = "lfp-pipe-ingress"
 		claims.Audience = cfg.NATSTunnelAccount
 		claims.Expires = time.Now().Add(12 * time.Hour).Unix()
 		claims.Pub.Allow.Add(cfg.NATSRequestSubjectPrefix + ".>")
@@ -136,9 +136,9 @@ func authorize(req *jwt.AuthorizationRequest, cfg config.Config, tickets *ticket
 	user.Audience = cfg.NATSTunnelAccount
 	user.Expires = claims.ExpiresAt.Unix()
 	// A tunnel claim is a two-phase request/reply exchange: the client replies
-	// to the server inbox and supplies its own inbox for the winner ack. NATS
+	// to the ingress inbox and supplies its own inbox for the winner ack. NATS
 	// response permissions alone reject that publish-with-reply shape, so grant
-	// the server inbox namespace explicitly. The server still validates the
+	// the ingress inbox namespace explicitly. The ingress still validates the
 	// connection ID and selected client before accepting a data connection.
 	user.Pub.Allow.Add("_INBOX.>")
 	user.Sub.Allow.Add(subject)

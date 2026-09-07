@@ -1,13 +1,13 @@
 # lfp-pipe
 
-`lfp-pipe` publishes TCP services that live behind NAT or a firewall. A public
-server accepts ingress traffic, announces it over NATS, and a matching private
-client creates the reverse data connection to the server. The application bytes
+`lfp-pipe` publishes TCP services that live behind NAT or a firewall. An
+ingress accepts public traffic, announces it over NATS, and a matching private
+client creates the reverse callback connection to that ingress. The application bytes
 then flow directly through that paired TCP connection.
 
 The workspace produces two binaries:
 
-- `lfp-pipe-server` accepts public and reverse data connections.
+- `lfp-pipe-ingress` accepts public and reverse callback connections.
 - `lfp-pipe-client` claims matching requests and connects to private backends.
 
 The `shared` crate owns configuration, protocol types, routing, logging, and the
@@ -16,14 +16,14 @@ relay implementation used by both binaries. See
 
 ## How a connection works
 
-1. A public TCP client connects to the server.
-2. The server detects TLS SNI or an HTTP `Host` header when available.
-3. The server publishes a `ConnectionRequest` over NATS.
-4. Eligible clients claim the request; the server selects one round-robin.
+1. A public TCP client connects to the ingress.
+2. The ingress detects TLS SNI or an HTTP `Host` header when available.
+3. The ingress publishes a `ConnectionRequest` over NATS.
+4. Eligible clients claim the request; the ingress selects one round-robin.
 5. The selected client connects to its private backend and opens a reverse TCP
-   connection to the server's advertised data address.
+   connection to the ingress's advertised callback address.
 6. A short prefix binds the reverse connection to the waiting public socket.
-7. Server and client relay bytes bidirectionally until either side closes.
+7. Ingress and client relay bytes bidirectionally until either side closes.
 
 NATS is the control plane only. Payload traffic does not pass through NATS.
 
@@ -62,7 +62,7 @@ and is always used on Windows and macOS.
 
 The larger buffered fallback reduces syscall and wakeup pressure, but it is not
 a guaranteed throughput improvement: socket autotuning, congestion control,
-latency, CPU, and the public-server hairpin can dominate. Benchmark the public
+latency, CPU, and the ingress hairpin can dominate. Benchmark the public
 path before and after tuning. Expected `BrokenPipe` and connection-reset errors
 during browser speed tests are debug events rather than warning spam.
 
@@ -73,18 +73,18 @@ optional and supplies convenient development tasks.
 
 ```powershell
 cargo build --workspace --release
-cargo run -p server -- --config .\server.example.toml
+cargo run -p ingress -- --config .\ingress.example.toml
 cargo run -p client -- --config .\client.example.toml
 ```
 
 Every option appears in the generated help:
 
 ```text
-lfp-pipe-server --help
+lfp-pipe-ingress --help
 lfp-pipe-client --help
 ```
 
-For the local LibreSpeed stack, use `mise run server-dev` in one terminal and
+For the local LibreSpeed stack, use `mise run ingress-dev` in one terminal and
 `mise run client-dev` in another. Caddy listens on `9443`, LibreSpeed is bound to
 loopback port `8080`, and the example route is `wsl.regbodesktop.local`.
 
@@ -134,6 +134,10 @@ a mounted file.
 | `--request-subject` | `LFP_PIPE_REQUEST_SUBJECT` |
 | `--claim-timeout-ms` | `LFP_PIPE_CLAIM_TIMEOUT_MS` |
 | `--pending-timeout-ms` | `LFP_PIPE_PENDING_TIMEOUT_MS` |
+| `--ingress-handshake-timeout-ms` | `LFP_PIPE_INGRESS_HANDSHAKE_TIMEOUT_MS` |
+| `--callback-handshake-timeout-ms` | `LFP_PIPE_CALLBACK_HANDSHAKE_TIMEOUT_MS` |
+| `--max-ingress-connections` | `LFP_PIPE_MAX_INGRESS_CONNECTIONS` |
+| `--max-callback-handshakes` | `LFP_PIPE_MAX_CALLBACK_HANDSHAKES` |
 
 Client-specific overrides are:
 
@@ -148,7 +152,7 @@ Client-specific overrides are:
 | `--oauth-client-secret-file` | `LFP_PIPE_OAUTH_CLIENT_SECRET_FILE` |
 
 Backend rules are structured and therefore remain TOML-only. Start from
-[`server.example.toml`](server.example.toml) and
+[`ingress.example.toml`](ingress.example.toml) and
 [`client.example.toml`](client.example.toml). For an unattended client, create
 an Authentik service principal in the management console and start from
 [`client.oauth.example.toml`](client.oauth.example.toml). The client exchanges
@@ -172,7 +176,11 @@ Backend addresses accept ordinary `host:port` values plus loopback shorthands:
 Caddy's reverse-proxy defaults: the request method, URI, and public `Host` are
 preserved; trusted `X-Forwarded-*` headers are set; and a path prefix is removed
 only when `strip_path_prefix = true` is configured explicitly. Claim and
-pending timeouts apply only while pairing a new connection. Once paired, raw
+pending timeouts apply only while pairing a new connection. The 15-second
+ingress and callback handshake deadlines are total deadlines, so a peer cannot
+retain capacity by slowly trickling bytes. Optional per-instance public-connection
+and callback-handshake limits are disabled by default (`0`) and can be enabled
+without adding cluster-wide state. Once paired, raw
 TCP and terminated-TLS relays have no application-level idle timeout; either
 endpoint owns connection lifetime, including SSE heartbeats and WebSockets.
 
@@ -341,7 +349,7 @@ without recompiling:
 
 ```powershell
 lfp-pipe-client --config client.toml --log-filter "info,client=debug,shared=debug"
-$env:RUST_LOG = "info,server=debug,shared=trace"
+$env:RUST_LOG = "info,ingress=debug,shared=trace"
 ```
 
 Logging uses `tracing`, so disabled debug callsites are filtered before events
@@ -377,7 +385,7 @@ Install both binaries from the latest compatible GitHub release:
 
 ```text
 mise use -g github:regbo/lfp-pipe
-lfp-pipe-server --help
+lfp-pipe-ingress --help
 lfp-pipe-client --help
 ```
 
@@ -388,7 +396,7 @@ do not put the token in this repository or on the command line.
 For an ephemeral pinned invocation, use:
 
 ```text
-mise exec github:regbo/lfp-pipe@0.1.1 -- lfp-pipe-server --version
+mise exec github:regbo/lfp-pipe@0.1.1 -- lfp-pipe-ingress --version
 ```
 
 Build local assets and create the next tag from a clean worktree with:
@@ -410,13 +418,13 @@ for inspection.
   headless client image and a host-network Compose example. Host networking
   preserves loopback backend addresses such as `127.0.0.1:6565`.
 - [`deploy/swarm01/README.md`](deploy/swarm01/README.md) documents the public
-  native systemd server.
+  native systemd ingress.
 - [`deploy/swarm/README.md`](deploy/swarm/README.md) documents the Authentik,
   NATS Auth Callout, web console, and Docker Swarm control plane.
 - [`deploy/unraid/README.md`](deploy/unraid/README.md) documents the native
-  LFPConnect client/server supervisors and LibreSpeed backend.
+  LFPConnect client/ingress supervisors and LibreSpeed backend.
 
-The production Swarm deployment runs one server per manager. Public routes
-continue to enter through Traefik on port 443, while each server task publishes
+The production Swarm deployment runs one ingress per manager. Public routes
+continue to enter through Traefik on port 443, while each ingress task publishes
 7001 directly on its node and advertises that manager's DNS name for callback
 affinity. Example TLS endpoint: `https://chat.pipe.example.com/`.

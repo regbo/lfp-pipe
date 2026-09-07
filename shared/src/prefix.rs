@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct PrefixEnvelope {
     /// Wire-format version.
     pub version: u16,
-    /// Client that won the server's claim selection.
+    /// Client that won the ingress claim selection.
     pub client_id: String,
     /// Public ingress connection to which this callback belongs.
     pub connection_id: String,

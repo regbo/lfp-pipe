@@ -61,9 +61,9 @@ pub struct CentralClientBootstrap {
     pub client_secret_file: Option<String>,
 }
 
-/// Public-server configuration loaded from TOML and optional CLI overrides.
+/// Ingress configuration loaded from TOML and optional CLI overrides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerConfig {
+pub struct IngressConfig {
     /// Address accepting public ingress connections.
     pub public_listen: String,
     /// Address accepting callback/data connections from tunnel clients.
@@ -93,7 +93,19 @@ pub struct ServerConfig {
     /// connections deliberately have no application-level idle timeout.
     #[serde(default = "default_pending_timeout_ms")]
     pub pending_timeout_ms: u64,
-    /// Exact TLS SNI routes forwarded directly from the public listener.
+    /// Maximum time allowed to receive enough ingress bytes to identify TLS SNI or HTTP Host.
+    #[serde(default = "default_ingress_handshake_timeout_ms")]
+    pub ingress_handshake_timeout_ms: u64,
+    /// Maximum time allowed to receive and decode a callback prefix.
+    #[serde(default = "default_callback_handshake_timeout_ms")]
+    pub callback_handshake_timeout_ms: u64,
+    /// Maximum concurrent public connections handled by this ingress instance; zero is unlimited.
+    #[serde(default = "default_max_ingress_connections")]
+    pub max_ingress_connections: usize,
+    /// Maximum concurrent unauthenticated callback handshakes; zero is unlimited.
+    #[serde(default = "default_max_callback_handshakes")]
+    pub max_callback_handshakes: usize,
+    /// Exact TLS SNI routes forwarded directly from the ingress listener.
     ///
     /// This is suitable for TLS-first protocols such as NATS with
     /// `handshake_first: true`; TLS remains end-to-end to the backend.
@@ -101,7 +113,7 @@ pub struct ServerConfig {
     pub sni_passthrough_routes: Vec<SniPassthroughRoute>,
 }
 
-/// One exact TLS hostname forwarded directly by the public server.
+/// One exact TLS hostname forwarded directly by the ingress.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SniPassthroughRoute {
     /// Exact, case-insensitive TLS Server Name Indication value.
@@ -110,29 +122,37 @@ pub struct SniPassthroughRoute {
     pub backend_addr: String,
 }
 
-/// Optional server values supplied by Clap after CLI/environment resolution.
+/// Optional ingress values supplied by Clap after CLI/environment resolution.
 #[derive(Debug, Default)]
-pub struct ServerOverrides {
-    /// Override for [`ServerConfig::public_listen`].
+pub struct IngressOverrides {
+    /// Override for [`IngressConfig::public_listen`].
     pub public_listen: Option<String>,
-    /// Override for [`ServerConfig::data_listen`].
+    /// Override for [`IngressConfig::data_listen`].
     pub data_listen: Option<String>,
-    /// Override for [`ServerConfig::advertised_data_addr`]; empty clears it.
+    /// Override for [`IngressConfig::advertised_data_addr`]; empty clears it.
     pub advertised_data_addr: Option<String>,
-    /// Override for [`ServerConfig::nats_url`].
+    /// Override for [`IngressConfig::nats_url`].
     pub nats_url: Option<String>,
-    /// Override for [`ServerConfig::nats_token_file`].
+    /// Override for [`IngressConfig::nats_token_file`].
     pub nats_token_file: Option<String>,
-    /// Override for [`ServerConfig::relay_mode`].
+    /// Override for [`IngressConfig::relay_mode`].
     pub relay_mode: Option<RelayMode>,
-    /// Override for [`ServerConfig::request_subject`].
+    /// Override for [`IngressConfig::request_subject`].
     pub request_subject: Option<String>,
-    /// Override for [`ServerConfig::domain_subject_routing`].
+    /// Override for [`IngressConfig::domain_subject_routing`].
     pub domain_subject_routing: Option<bool>,
-    /// Override for [`ServerConfig::claim_timeout_ms`].
+    /// Override for [`IngressConfig::claim_timeout_ms`].
     pub claim_timeout_ms: Option<u64>,
-    /// Override for [`ServerConfig::pending_timeout_ms`].
+    /// Override for [`IngressConfig::pending_timeout_ms`].
     pub pending_timeout_ms: Option<u64>,
+    /// Override for [`IngressConfig::ingress_handshake_timeout_ms`].
+    pub ingress_handshake_timeout_ms: Option<u64>,
+    /// Override for [`IngressConfig::callback_handshake_timeout_ms`].
+    pub callback_handshake_timeout_ms: Option<u64>,
+    /// Override for [`IngressConfig::max_ingress_connections`].
+    pub max_ingress_connections: Option<usize>,
+    /// Override for [`IngressConfig::max_callback_handshakes`].
+    pub max_callback_handshakes: Option<usize>,
 }
 
 /// Available bidirectional stream-copy implementations.
@@ -148,16 +168,16 @@ pub enum RelayMode {
     Splice,
 }
 
-impl ServerConfig {
+impl IngressConfig {
     /// Return the callback address placed in each connection request.
-    pub fn server_data_addr(&self) -> &str {
+    pub fn ingress_callback_addr(&self) -> &str {
         self.advertised_data_addr
             .as_deref()
             .unwrap_or(&self.data_listen)
     }
 
     /// Apply already-resolved CLI/environment values over the TOML values.
-    pub fn with_overrides(mut self, overrides: ServerOverrides) -> Self {
+    pub fn with_overrides(mut self, overrides: IngressOverrides) -> Self {
         if let Some(value) = overrides.public_listen {
             self.public_listen = value;
         }
@@ -188,6 +208,18 @@ impl ServerConfig {
         if let Some(value) = overrides.pending_timeout_ms {
             self.pending_timeout_ms = value;
         }
+        if let Some(value) = overrides.ingress_handshake_timeout_ms {
+            self.ingress_handshake_timeout_ms = value;
+        }
+        if let Some(value) = overrides.callback_handshake_timeout_ms {
+            self.callback_handshake_timeout_ms = value;
+        }
+        if let Some(value) = overrides.max_ingress_connections {
+            self.max_ingress_connections = value;
+        }
+        if let Some(value) = overrides.max_callback_handshakes {
+            self.max_callback_handshakes = value;
+        }
         self
     }
 }
@@ -217,7 +249,7 @@ pub struct ClientConfig {
     /// NATS subject from which connection requests are consumed.
     #[serde(default = "default_request_subject")]
     pub request_subject: String,
-    /// Maximum wait for the server to accept or reject a claim.
+    /// Maximum wait for the ingress to accept or reject a claim.
     #[serde(default = "default_claim_ack_timeout_ms")]
     pub claim_ack_timeout_ms: u64,
     /// Ordered hostname-to-backend routing rules.
@@ -423,7 +455,7 @@ pub struct ClientConfigDefaults {
     /// Default NATS connection-request subject.
     #[serde(default)]
     pub request_subject: Option<String>,
-    /// Default maximum wait for the server's claim decision.
+    /// Default maximum wait for the ingress claim decision.
     #[serde(default)]
     pub claim_ack_timeout_ms: Option<u64>,
     /// Default private destination for TLS or raw TCP traffic.
@@ -758,6 +790,22 @@ fn default_pending_timeout_ms() -> u64 {
     10_000
 }
 
+fn default_ingress_handshake_timeout_ms() -> u64 {
+    15_000
+}
+
+fn default_callback_handshake_timeout_ms() -> u64 {
+    15_000
+}
+
+fn default_max_ingress_connections() -> usize {
+    0
+}
+
+fn default_max_callback_handshakes() -> usize {
+    0
+}
+
 fn default_claim_ack_timeout_ms() -> u64 {
     1_500
 }
@@ -836,18 +884,18 @@ fn default_oidc_session_ttl_seconds() -> u64 {
     8 * 60 * 60
 }
 
-/// Load server TOML without applying CLI or environment overrides.
-pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
+/// Load ingress TOML without applying CLI or environment overrides.
+pub fn load_ingress_config(path: &Path) -> anyhow::Result<IngressConfig> {
     let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read server config {}", path.display()))?;
-    let config: ServerConfig = toml::from_str(&raw)
-        .with_context(|| format!("failed to parse server config {}", path.display()))?;
-    validate_server_config(&config)
-        .with_context(|| format!("invalid server config {}", path.display()))?;
+        .with_context(|| format!("failed to read ingress config {}", path.display()))?;
+    let config: IngressConfig = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse ingress config {}", path.display()))?;
+    validate_ingress_config(&config)
+        .with_context(|| format!("invalid ingress config {}", path.display()))?;
     Ok(config)
 }
 
-fn validate_server_config(config: &ServerConfig) -> anyhow::Result<()> {
+fn validate_ingress_config(config: &IngressConfig) -> anyhow::Result<()> {
     let mut hostnames = HashSet::new();
     for route in &config.sni_passthrough_routes {
         let hostname = route.hostname.trim().to_ascii_lowercase();
@@ -1379,7 +1427,7 @@ fn merge_oauth_defaults(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientConfig, ClientOverrides, RelayMode, ServerConfig, ServerOverrides,
+        ClientConfig, ClientOverrides, IngressConfig, IngressOverrides, RelayMode,
         parse_client_configs, resolve_loopback_shorthand,
     };
 
@@ -1394,8 +1442,8 @@ mod tests {
     }
 
     #[test]
-    fn server_defaults_and_overrides_are_layered() {
-        let config: ServerConfig = toml::from_str(
+    fn ingress_defaults_and_overrides_are_layered() {
+        let config: IngressConfig = toml::from_str(
             r#"
                 public_listen = "127.0.0.1:7443"
                 data_listen = "127.0.0.1:7001"
@@ -1403,14 +1451,18 @@ mod tests {
                 nats_url = "nats://localhost:4222"
             "#,
         )
-        .expect("server TOML");
+        .expect("ingress TOML");
         assert_eq!(config.relay_mode, RelayMode::Auto);
+        assert_eq!(config.ingress_handshake_timeout_ms, 15_000);
+        assert_eq!(config.callback_handshake_timeout_ms, 15_000);
+        assert_eq!(config.max_ingress_connections, 0);
+        assert_eq!(config.max_callback_handshakes, 0);
 
-        let config = config.with_overrides(ServerOverrides {
+        let config = config.with_overrides(IngressOverrides {
             public_listen: Some("0.0.0.0:8443".into()),
             advertised_data_addr: Some(String::new()),
             relay_mode: Some(RelayMode::Buffered),
-            ..ServerOverrides::default()
+            ..IngressOverrides::default()
         });
         assert_eq!(config.public_listen, "0.0.0.0:8443");
         assert_eq!(config.advertised_data_addr, None);

@@ -59,7 +59,7 @@ services:
       LFP_AUTH_NATS_CALLOUT_PASSWORD_FILE: /run/secrets/nats_callout_password
       LFP_AUTH_NATS_ISSUER_SEED_FILE: /run/secrets/nats_auth_issuer_seed
       LFP_AUTH_NATS_XKEY_SEED_FILE: /run/secrets/nats_auth_xkey_seed
-      LFP_AUTH_NATS_INTERNAL_SERVER_TOKEN_FILE: /run/secrets/nats_internal_server_token
+      LFP_AUTH_NATS_INTERNAL_INGRESS_TOKEN_FILE: /run/secrets/nats_internal_ingress_token
       LFP_AUTH_NATS_TUNNEL_ACCOUNT: TUNNELS
       LFP_AUTH_NATS_SUBJECT_PREFIX: lfp.v1.connect
       LFP_AUTH_TICKET_TTL_MINUTES: ${LFP_TICKET_TTL_MINUTES:-15}
@@ -71,7 +71,7 @@ services:
       - nats_callout_password
       - nats_auth_issuer_seed
       - nats_auth_xkey_seed
-      - nats_internal_server_token
+      - nats_internal_ingress_token
     networks: [control]
     deploy:
       replicas: 2
@@ -93,16 +93,16 @@ services:
       update_config:
         order: start-first
 
-  lfp-server:
-    image: ${LFP_SERVER_IMAGE:-lfp-pipe-server:latest}
-    command: ["--config", "/etc/lfp-pipe/server.toml"]
+  lfp-ingress:
+    image: ${LFP_INGRESS_IMAGE:-lfp-pipe-ingress:latest}
+    command: ["--config", "/etc/lfp-pipe/ingress.toml"]
     environment:
       LFP_PIPE_ADVERTISED_DATA_ADDR: "{{.Node.Hostname}}.${LFP_NODE_DOMAIN:?set LFP_NODE_DOMAIN}:${LFP_DATA_PORT:-7001}"
     configs:
-      - source: lfp_server_config
-        target: /etc/lfp-pipe/server.toml
+      - source: lfp_ingress_config
+        target: /etc/lfp-pipe/ingress.toml
     secrets:
-      - nats_internal_server_token
+      - nats_internal_ingress_token
     networks: [control]
     ports:
       - target: 7443
@@ -134,8 +134,8 @@ networks:
 configs:
   nats_config:
     file: ./nats.conf
-  lfp_server_config:
-    file: ./lfp-server.toml
+  lfp_ingress_config:
+    file: ./lfp-ingress.toml
 
 secrets:
   authentik_client_secret:
@@ -154,5 +154,5 @@ secrets:
     external: true
   nats_auth_xkey_seed:
     external: true
-  nats_internal_server_token:
+  nats_internal_ingress_token:
     external: true

@@ -363,7 +363,7 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
         debug!(
             connection_id = %request.connection_id,
             reason = ack.reason.as_deref().unwrap_or("claim rejected"),
-            "server selected another client"
+            "ingress selected another client"
         );
         return Ok(());
     }
@@ -435,12 +435,17 @@ async fn bridge_connection(
     relay_mode: RelayMode,
     acme: Option<&acme::AcmeRuntime>,
 ) -> anyhow::Result<()> {
-    let mut server_stream = TcpStream::connect(&request.server_data_addr)
+    let mut ingress_stream = TcpStream::connect(&request.ingress_callback_addr)
         .await
-        .with_context(|| format!("failed to connect server {}", request.server_data_addr))?;
+        .with_context(|| {
+            format!(
+                "failed to connect ingress {}",
+                request.ingress_callback_addr
+            )
+        })?;
 
     let prefix = PrefixEnvelope::new(client_id, &request.connection_id);
-    server_stream
+    ingress_stream
         .write_all(&prefix.encode_line()?)
         .await
         .context("failed to write prefix envelope")?;
@@ -453,7 +458,7 @@ async fn bridge_connection(
                 || backend.rule.backend_host.is_some()
                 || backend.authorization.is_some()
         });
-    let plaintext_http = connection_is_plaintext_http(&server_stream, inspect_http).await?;
+    let plaintext_http = connection_is_plaintext_http(&ingress_stream, inspect_http).await?;
     if let Some(acme) = acme
         && !plaintext_http
     {
@@ -462,7 +467,7 @@ async fn bridge_connection(
             client_id,
             "handing tunneled TLS to automatic certificate runtime"
         );
-        return acme.accept(server_stream, request.client_ip.clone()).await;
+        return acme.accept(ingress_stream, request.client_ip.clone()).await;
     }
     let fallback = backends
         .iter()
@@ -477,7 +482,7 @@ async fn bridge_connection(
             .clone()
             .context("HTTP request has no hostname")?;
         return http_proxy::serve(
-            server_stream,
+            ingress_stream,
             hostname,
             request.client_ip.clone(),
             if request.tls { "https" } else { "http" },
@@ -501,16 +506,16 @@ async fn bridge_connection(
     let mut backend_stream = TcpStream::connect(&backend_addr)
         .await
         .with_context(|| format!("failed to connect backend {backend_addr}"))?;
-    let (to_server, to_backend) =
-        copy_bidirectional_with_mode(&mut server_stream, &mut backend_stream, relay_mode)
+    let (to_ingress, to_backend) =
+        copy_bidirectional_with_mode(&mut ingress_stream, &mut backend_stream, relay_mode)
             .await
             .context("copy_bidirectional failed")?;
-    debug!(to_server, to_backend, "client relay finished");
+    debug!(to_ingress, to_backend, "client relay finished");
     Ok(())
 }
 
 async fn connection_is_plaintext_http(
-    server_stream: &TcpStream,
+    ingress_stream: &TcpStream,
     inspect_http: bool,
 ) -> anyhow::Result<bool> {
     if !inspect_http {
@@ -521,7 +526,7 @@ async fn connection_is_plaintext_http(
     // backend-first or raw protocols still fall back to the default endpoint.
     let mut prefix = [0_u8; 24];
     let plaintext_http =
-        match timeout(Duration::from_secs(2), server_stream.peek(&mut prefix)).await {
+        match timeout(Duration::from_secs(2), ingress_stream.peek(&mut prefix)).await {
             Ok(Ok(read)) => read > 0 && looks_like_http_prefix(&prefix[..read]),
             Ok(Err(error)) => return Err(error).context("failed to inspect tunneled protocol"),
             Err(_) => false,
@@ -557,13 +562,13 @@ mod tests {
     async fn protocol_backend_is_opt_in_and_routes_plain_http() -> anyhow::Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let mut peer = TcpStream::connect(listener.local_addr()?).await?;
-        let (server_stream, _) = listener.accept().await?;
+        let (ingress_stream, _) = listener.accept().await?;
         peer.write_all(b"GET / HTTP/1.1\r\n").await?;
 
-        assert!(connection_is_plaintext_http(&server_stream, true).await?);
+        assert!(connection_is_plaintext_http(&ingress_stream, true).await?);
 
-        assert!(!connection_is_plaintext_http(&server_stream, false).await?);
-        assert!(connection_is_plaintext_http(&server_stream, true).await?);
+        assert!(!connection_is_plaintext_http(&ingress_stream, false).await?);
+        assert!(connection_is_plaintext_http(&ingress_stream, true).await?);
         Ok(())
     }
 }

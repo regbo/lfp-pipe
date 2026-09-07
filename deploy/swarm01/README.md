@@ -1,11 +1,11 @@
 # Public swarm01 deployment
 
-The public endpoint runs directly as a Rust systemd service; the tunnel server
+The public endpoint runs directly as a Rust systemd service; the ingress
 is not containerized. Install these files:
 
 ```text
-/opt/lfp-pipe/bin/lfp-pipe-server
-/etc/lfp-pipe/librespeed-server.toml
+/opt/lfp-pipe/bin/lfp-pipe-ingress
+/etc/lfp-pipe/librespeed-ingress.toml
 /etc/systemd/system/lfp-pipe-librespeed.service
 ```
 

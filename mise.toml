@@ -3,15 +3,15 @@ rust = "stable"
 
 [tasks.build]
 description = "Build both Rust binaries"
-depends = ["build:shared", "build:server", "build:client"]
+depends = ["build:shared", "build:ingress", "build:client"]
 
 [tasks."build:shared"]
 description = "Build the shared crate"
 run = "cargo build --release -p shared"
 
-[tasks."build:server"]
-description = "Build the server binary"
-run = "cargo build --release -p server"
+[tasks."build:ingress"]
+description = "Build the ingress binary"
+run = "cargo build --release -p ingress"
 
 [tasks."build:client"]
 description = "Build the client binary"
@@ -38,26 +38,26 @@ description = "Start Caddy as the local TLS frontend"
 run = "caddy run --watch --config ./Caddyfile"
 tools.caddy = "latest"
 
-[tasks.server]
-description = "Start the Rust server with the example config"
-depends = ["build:server"]
-run = "RUST_LOG=debug cargo run --release -p server -- --config ./server.example.toml"
+[tasks.ingress]
+description = "Start the Rust ingress with the example config"
+depends = ["build:ingress"]
+run = "RUST_LOG=debug cargo run --release -p ingress -- --config ./ingress.example.toml"
 
-[tasks."server:watch"]
-description = "Watch, check, and rerun the Rust server with the example config"
+[tasks."ingress:watch"]
+description = "Watch, check, and rerun the Rust ingress with the example config"
 tools."cargo:cargo-watch" = "latest"
-run = "RUST_LOG=debug cargo watch -x check -x \"run -p server -- --config ./server.example.toml\""
+run = "RUST_LOG=debug cargo watch -x check -x \"run -p ingress -- --config ./ingress.example.toml\""
 
-[tasks."server-dev"]
-description = "Start NATS and the Rust server together"
+[tasks."ingress-dev"]
+description = "Start NATS and the Rust ingress together"
 usage = '''
-flag "--nats" help="Start a local NATS server alongside the Rust server watcher"
+flag "--nats" help="Start a local NATS server alongside the Rust ingress watcher"
 '''
 run = '''
 {% if usage.nats %}
-mise run nats ::: server:watch
+mise run nats ::: ingress:watch
 {% else %}
-mise run server:watch
+mise run ingress:watch
 {% endif %}
 '''
 
@@ -77,10 +77,10 @@ description = "Start LibreSpeed, Caddy, and the Rust client together"
 run = "mise run echo ::: caddy ::: client:watch"
 
 [tasks.dev]
-description = "Build everything, then show how to start server and client"
+description = "Build everything, then show how to start ingress and client"
 depends = ["build"]
 run = [
-  "echo server stack: mise run server-dev",
+  "echo ingress stack: mise run ingress-dev",
   "echo client stack: mise run client-dev",
 ]
 

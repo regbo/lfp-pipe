@@ -1,4 +1,4 @@
-//! Public ingress and callback-pairing server runtime.
+//! Public ingress and callback-pairing runtime.
 
 #![warn(missing_docs)]
 
@@ -8,11 +8,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, ensure};
 use async_nats::{Client, connection::State as NatsConnectionState};
 use futures::StreamExt;
 use shared::{
-    config::{ServerConfig, SniPassthroughRoute},
+    config::{IngressConfig, SniPassthroughRoute},
     http::{extract_http_host, looks_like_http_prefix},
     io::copy_bidirectional_with_mode,
     logging::is_expected_disconnect,
@@ -25,7 +25,7 @@ use shared::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     time::{Instant, sleep, timeout},
 };
 use tracing::{debug, info, warn};
@@ -36,20 +36,34 @@ const NATS_WATCHDOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct AppState {
-    config: ServerConfig,
+    config: IngressConfig,
     nats: Client,
     pending: Arc<Mutex<HashMap<String, PendingConnection>>>,
     route_claim_cursor: Arc<Mutex<HashMap<String, usize>>>,
+    ingress_capacity: Option<Arc<Semaphore>>,
+    callback_handshake_capacity: Option<Arc<Semaphore>>,
 }
 
 struct PendingConnection {
     ingress: TcpStream,
+    ingress_preface: Vec<u8>,
     client_id: String,
     expires_at: Instant,
+    // The permit follows the public socket through pending and relay states.
+    _ingress_permit: Option<OwnedSemaphorePermit>,
 }
 
 /// Accept public ingress and client callback sockets until either listener fails.
-pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
+pub async fn run(config: IngressConfig) -> anyhow::Result<()> {
+    ensure!(
+        config.ingress_handshake_timeout_ms > 0,
+        "ingress_handshake_timeout_ms must be greater than zero"
+    );
+    ensure!(
+        config.callback_handshake_timeout_ms > 0,
+        "callback_handshake_timeout_ms must be greater than zero"
+    );
+
     let nats = connect_nats(&config.nats_url, config.nats_token_file.as_deref(), None)
         .await
         .context("failed to connect to NATS")?;
@@ -60,20 +74,30 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind data listener {}", config.data_listen))?;
 
+    let ingress_capacity = (config.max_ingress_connections > 0)
+        .then(|| Arc::new(Semaphore::new(config.max_ingress_connections)));
+    let callback_handshake_capacity = (config.max_callback_handshakes > 0)
+        .then(|| Arc::new(Semaphore::new(config.max_callback_handshakes)));
     let state = AppState {
         config,
         nats,
         pending: Arc::new(Mutex::new(HashMap::new())),
         route_claim_cursor: Arc::new(Mutex::new(HashMap::new())),
+        ingress_capacity,
+        callback_handshake_capacity,
     };
 
     info!(
         public_listen = %state.config.public_listen,
         data_listen = %state.config.data_listen,
-        advertised_data_addr = %state.config.server_data_addr(),
+        advertised_data_addr = %state.config.ingress_callback_addr(),
         request_subject = %state.config.request_subject,
         domain_subject_routing = state.config.domain_subject_routing,
-        "server listening"
+        ingress_handshake_timeout_ms = state.config.ingress_handshake_timeout_ms,
+        callback_handshake_timeout_ms = state.config.callback_handshake_timeout_ms,
+        max_ingress_connections = state.config.max_ingress_connections,
+        max_callback_handshakes = state.config.max_callback_handshakes,
+        "ingress listening"
     );
 
     let mut public_task = tokio::spawn(accept_public_loop(public_listener, state.clone()));
@@ -141,9 +165,19 @@ async fn accept_public_loop(listener: TcpListener, state: AppState) -> anyhow::R
             .accept()
             .await
             .context("accept on public listener failed")?;
+        let ingress_permit = match &state.ingress_capacity {
+            Some(capacity) => match capacity.clone().try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    debug!(%peer, "rejecting ingress because this instance reached its connection limit");
+                    continue;
+                }
+            },
+            None => None,
+        };
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_ingress(stream, peer, state).await {
+            if let Err(error) = handle_ingress(stream, peer, state, ingress_permit).await {
                 if is_expected_disconnect(&error) {
                     debug!(%peer, ?error, "ingress peer closed connection");
                 } else {
@@ -160,13 +194,23 @@ async fn accept_data_loop(listener: TcpListener, state: AppState) -> anyhow::Res
             .accept()
             .await
             .context("accept on data listener failed")?;
+        let handshake_permit = match &state.callback_handshake_capacity {
+            Some(capacity) => match capacity.clone().try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    debug!(%peer, "rejecting callback because this instance reached its handshake limit");
+                    continue;
+                }
+            },
+            None => None,
+        };
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_client_data(stream, state).await {
+            if let Err(error) = handle_client_data(stream, state, handshake_permit).await {
                 if is_expected_disconnect(&error) {
                     debug!(%peer, ?error, "callback peer closed connection");
                 } else {
-                    warn!(%peer, ?error, "client data connection failed");
+                    warn!(%peer, ?error, "callback connection failed");
                 }
             }
         });
@@ -177,8 +221,14 @@ async fn handle_ingress(
     stream: TcpStream,
     peer: std::net::SocketAddr,
     state: AppState,
+    ingress_permit: Option<OwnedSemaphorePermit>,
 ) -> anyhow::Result<()> {
-    let (hostname, tls) = detect_hostname(&stream).await?;
+    let mut stream = stream;
+    let (hostname, tls, ingress_preface) = detect_hostname_before(
+        &mut stream,
+        Duration::from_millis(state.config.ingress_handshake_timeout_ms),
+    )
+    .await?;
     if let Some(route) =
         select_sni_passthrough(&state.config.sni_passthrough_routes, hostname.as_deref())
     {
@@ -190,6 +240,10 @@ async fn handle_ingress(
             backend_addr = %route.backend_addr,
             "forwarding direct SNI passthrough"
         );
+        backend
+            .write_all(&ingress_preface)
+            .await
+            .context("forward SNI passthrough preface")?;
         let mut ingress = stream;
         let (upstream, downstream) =
             copy_bidirectional_with_mode(&mut ingress, &mut backend, state.config.relay_mode)
@@ -218,8 +272,10 @@ async fn handle_ingress(
             connection_id.clone(),
             PendingConnection {
                 ingress: stream,
+                ingress_preface,
                 client_id: claim.client_id.clone(),
                 expires_at,
+                _ingress_permit: ingress_permit,
             },
         );
     }
@@ -238,43 +294,66 @@ fn select_sni_passthrough<'a>(
         .find(|route| route.hostname.eq_ignore_ascii_case(hostname))
 }
 
-async fn detect_hostname(stream: &TcpStream) -> anyhow::Result<(Option<String>, bool)> {
-    let mut size = 512usize;
-    let max_size = 16 * 1024;
+async fn detect_hostname(
+    stream: &mut TcpStream,
+) -> anyhow::Result<(Option<String>, bool, Vec<u8>)> {
+    const MAX_PREFACE_BYTES: usize = 16 * 1024;
+    const TLS_HEADER_BYTES: usize = 5;
 
+    let mut buf = Vec::with_capacity(512);
     loop {
-        let mut buf = vec![0_u8; size];
-        let peeked = stream
-            .peek(&mut buf)
+        let mut chunk = [0_u8; 512];
+        let chunk_len = chunk.len().min(MAX_PREFACE_BYTES - buf.len());
+        let read = stream
+            .read(&mut chunk[..chunk_len])
             .await
-            .context("failed to peek ingress bytes")?;
-        if peeked == 0 {
-            return Ok((None, false));
+            .context("failed to read ingress protocol preface")?;
+        if read == 0 {
+            return Ok((None, false, buf));
         }
-        buf.truncate(peeked);
+        buf.extend_from_slice(&chunk[..read]);
 
-        match validate_tls_record_header(&buf) {
-            Ok(()) => match extract_sni(&buf) {
-                Ok(value) => return Ok((value, true)),
-                Err(error) if size < max_size => {
-                    debug!(?error, size, "client hello incomplete, peeking more");
-                    size = (size * 2).min(max_size);
-                }
-                Err(error) => return Err(error),
-            },
-            Err(_) => {
-                if let Some(host) = extract_http_host(&buf) {
-                    return Ok((Some(host), false));
-                }
-                if size < max_size && looks_like_http_prefix(&buf) {
-                    debug!(size, "http request incomplete, peeking more");
-                    size = (size * 2).min(max_size);
-                    continue;
-                }
-                return Ok((None, false));
+        if buf[0] == 0x16 {
+            if buf.len() < TLS_HEADER_BYTES {
+                continue;
             }
+            validate_tls_record_header(&buf)?;
+            let record_len = TLS_HEADER_BYTES + u16::from_be_bytes([buf[3], buf[4]]) as usize;
+            ensure!(
+                record_len <= MAX_PREFACE_BYTES,
+                "TLS ClientHello exceeds {MAX_PREFACE_BYTES} byte ingress preface limit"
+            );
+            if buf.len() < record_len {
+                continue;
+            }
+            let hostname = extract_sni(&buf[..record_len])?;
+            return Ok((hostname, true, buf));
         }
+
+        if let Some(host) = extract_http_host(&buf) {
+            return Ok((Some(host), false, buf));
+        }
+        if looks_like_http_prefix(&buf) {
+            if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                return Ok((None, false, buf));
+            }
+            ensure!(
+                buf.len() < MAX_PREFACE_BYTES,
+                "HTTP headers exceed {MAX_PREFACE_BYTES} byte ingress preface limit"
+            );
+            continue;
+        }
+        return Ok((None, false, buf));
     }
+}
+
+async fn detect_hostname_before(
+    stream: &mut TcpStream,
+    deadline: Duration,
+) -> anyhow::Result<(Option<String>, bool, Vec<u8>)> {
+    timeout(deadline, detect_hostname(stream))
+        .await
+        .context("timed out waiting for ingress protocol preface")?
 }
 
 async fn broadcast_and_wait_for_claim(
@@ -301,7 +380,7 @@ async fn broadcast_and_wait_for_claim(
         client_ip: Some(client_ip),
         tls,
         reply_subject: reply_subject.clone(),
-        server_data_addr: state.config.server_data_addr().to_string(),
+        ingress_callback_addr: state.config.ingress_callback_addr().to_string(),
         deadline_unix_ms: unix_time_ms() + state.config.claim_timeout_ms,
     };
 
@@ -409,8 +488,16 @@ fn spawn_pending_cleanup(state: AppState, connection_id: String) {
     });
 }
 
-async fn handle_client_data(stream: TcpStream, state: AppState) -> anyhow::Result<()> {
-    let (prefix, mut stream) = read_prefix(stream).await?;
+async fn handle_client_data(
+    stream: TcpStream,
+    state: AppState,
+    handshake_permit: Option<OwnedSemaphorePermit>,
+) -> anyhow::Result<()> {
+    let (prefix, mut stream) = read_prefix_before(
+        stream,
+        Duration::from_millis(state.config.callback_handshake_timeout_ms),
+    )
+    .await?;
 
     let mut pending = state.pending.lock().await;
     let entry = pending
@@ -424,6 +511,7 @@ async fn handle_client_data(stream: TcpStream, state: AppState) -> anyhow::Resul
         ));
     }
     drop(pending);
+    drop(handshake_permit);
 
     debug!(
         connection_id = %prefix.connection_id,
@@ -431,7 +519,13 @@ async fn handle_client_data(stream: TcpStream, state: AppState) -> anyhow::Resul
         "binding claimed tunnel"
     );
 
-    relay_streams(entry.ingress, &mut stream, state.config.relay_mode).await
+    relay_streams(
+        entry.ingress,
+        &mut stream,
+        &entry.ingress_preface,
+        state.config.relay_mode,
+    )
+    .await
 }
 
 async fn read_prefix(stream: TcpStream) -> anyhow::Result<(PrefixEnvelope, TcpStream)> {
@@ -461,11 +555,25 @@ async fn read_prefix(stream: TcpStream) -> anyhow::Result<(PrefixEnvelope, TcpSt
     Ok((prefix, stream))
 }
 
+async fn read_prefix_before(
+    stream: TcpStream,
+    deadline: Duration,
+) -> anyhow::Result<(PrefixEnvelope, TcpStream)> {
+    timeout(deadline, read_prefix(stream))
+        .await
+        .context("timed out waiting for callback prefix")?
+}
+
 async fn relay_streams(
     mut ingress: TcpStream,
     data_stream: &mut TcpStream,
+    ingress_preface: &[u8],
     relay_mode: shared::config::RelayMode,
 ) -> anyhow::Result<()> {
+    data_stream
+        .write_all(ingress_preface)
+        .await
+        .context("forward ingress preface")?;
     let (upstream, downstream) =
         copy_bidirectional_with_mode(&mut ingress, data_stream, relay_mode)
             .await
@@ -483,12 +591,23 @@ fn unix_time_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use shared::{config::SniPassthroughRoute, prefix::PrefixEnvelope};
+    use std::time::Duration;
 
-    use super::select_sni_passthrough;
+    use shared::{config::SniPassthroughRoute, prefix::PrefixEnvelope};
+    use tokio::net::{TcpListener, TcpStream};
+
+    use super::{detect_hostname_before, read_prefix_before, select_sni_passthrough};
+
+    async fn idle_tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let connect = TcpStream::connect(listener.local_addr().expect("listen address"));
+        let accept = listener.accept();
+        let (client, accepted) = tokio::join!(connect, accept);
+        (client.expect("connect"), accepted.expect("accept").0)
+    }
 
     #[test]
-    fn prefix_round_trip_for_server_binding() {
+    fn prefix_round_trip_for_ingress_binding() {
         let prefix = PrefixEnvelope::new("client-a", "conn-a");
         let encoded = prefix.encode_line().expect("encode");
         let decoded = PrefixEnvelope::decode_line(&encoded).expect("decode");
@@ -506,5 +625,43 @@ mod tests {
         assert_eq!(selected, routes.first());
         assert!(select_sni_passthrough(&routes, Some("other.example.com")).is_none());
         assert!(select_sni_passthrough(&routes, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn ingress_protocol_detection_has_a_total_deadline() {
+        let (_idle_peer, mut ingress) = idle_tcp_pair().await;
+        let error = detect_hostname_before(&mut ingress, Duration::from_millis(50))
+            .await
+            .expect_err("idle ingress must time out");
+        assert!(format!("{error:#}").contains("timed out waiting for ingress protocol preface"));
+    }
+
+    #[tokio::test]
+    async fn callback_prefix_has_a_total_deadline() {
+        let (_idle_peer, callback) = idle_tcp_pair().await;
+        let error = read_prefix_before(callback, Duration::from_millis(50))
+            .await
+            .expect_err("idle callback must time out");
+        assert!(format!("{error:#}").contains("timed out waiting for callback prefix"));
+    }
+
+    #[tokio::test]
+    async fn fragmented_http_preface_is_buffered_and_replayed() {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut peer, mut ingress) = idle_tcp_pair().await;
+        let detection = tokio::spawn(async move {
+            detect_hostname_before(&mut ingress, Duration::from_secs(1)).await
+        });
+        peer.write_all(b"GE").await.expect("first fragment");
+        tokio::task::yield_now().await;
+        peer.write_all(b"T / HTTP/1.1\r\nHost: slow.example\r\n\r\n")
+            .await
+            .expect("second fragment");
+
+        let (hostname, tls, preface) = detection.await.expect("detection task").expect("detect");
+        assert_eq!(hostname.as_deref(), Some("slow.example"));
+        assert!(!tls);
+        assert_eq!(preface, b"GET / HTTP/1.1\r\nHost: slow.example\r\n\r\n");
     }
 }

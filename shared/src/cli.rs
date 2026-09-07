@@ -18,8 +18,8 @@ use clap::{Args, Parser};
 
 use crate::{
     config::{
-        CentralClientBootstrap, ClientConfig, ClientOverrides, RelayMode, ServerConfig,
-        ServerOverrides, load_central_client_bootstrap, load_client_configs, load_server_config,
+        CentralClientBootstrap, ClientConfig, ClientOverrides, IngressConfig, IngressOverrides,
+        RelayMode, load_central_client_bootstrap, load_client_configs, load_ingress_config,
     },
     logging::DEFAULT_LOG_FILTER,
 };
@@ -117,7 +117,7 @@ struct CommonOptions {
     #[arg(long, env = "LFP_PIPE_CONFIG", value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Tracing directives, for example `info,server=debug`.
+    /// Tracing directives, for example `info,ingress=debug`.
     #[arg(
         long,
         env = "RUST_LOG",
@@ -127,14 +127,14 @@ struct CommonOptions {
     log_filter: String,
 }
 
-/// CLI accepted by `lfp-pipe-server`.
+/// CLI accepted by `lfp-pipe-ingress`.
 #[derive(Debug, Parser)]
 #[command(
-    name = "lfp-pipe-server",
+    name = "lfp-pipe-ingress",
     version,
     about = "Expose private TCP services through a public lfp-pipe ingress"
 )]
-struct ServerCli {
+struct IngressCli {
     #[command(flatten)]
     common: CommonOptions,
 
@@ -177,15 +177,35 @@ struct ServerCli {
     /// Milliseconds to retain an ingress while awaiting its callback socket.
     #[arg(long, env = "LFP_PIPE_PENDING_TIMEOUT_MS", value_name = "MS")]
     pending_timeout_ms: Option<u64>,
+
+    /// Milliseconds allowed to identify TLS SNI or HTTP Host on a new ingress.
+    #[arg(long, env = "LFP_PIPE_INGRESS_HANDSHAKE_TIMEOUT_MS", value_name = "MS")]
+    ingress_handshake_timeout_ms: Option<u64>,
+
+    /// Milliseconds allowed to receive a callback prefix.
+    #[arg(
+        long,
+        env = "LFP_PIPE_CALLBACK_HANDSHAKE_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    callback_handshake_timeout_ms: Option<u64>,
+
+    /// Maximum concurrent public connections per ingress instance; zero is unlimited.
+    #[arg(long, env = "LFP_PIPE_MAX_INGRESS_CONNECTIONS", value_name = "COUNT")]
+    max_ingress_connections: Option<usize>,
+
+    /// Maximum concurrent unauthenticated callback handshakes; zero is unlimited.
+    #[arg(long, env = "LFP_PIPE_MAX_CALLBACK_HANDSHAKES", value_name = "COUNT")]
+    max_callback_handshakes: Option<usize>,
 }
 
-impl ServerCli {
-    fn load(self) -> anyhow::Result<RuntimeConfig<ServerConfig>> {
+impl IngressCli {
+    fn load(self) -> anyhow::Result<RuntimeConfig<IngressConfig>> {
         let config_path = self
             .common
             .config
-            .context("server requires --config or LFP_PIPE_CONFIG")?;
-        let config = load_server_config(&config_path)?.with_overrides(ServerOverrides {
+            .context("ingress requires --config or LFP_PIPE_CONFIG")?;
+        let config = load_ingress_config(&config_path)?.with_overrides(IngressOverrides {
             public_listen: self.public_listen,
             data_listen: self.data_listen,
             advertised_data_addr: self.advertised_data_addr,
@@ -196,6 +216,10 @@ impl ServerCli {
             domain_subject_routing: self.domain_subject_routing,
             claim_timeout_ms: self.claim_timeout_ms,
             pending_timeout_ms: self.pending_timeout_ms,
+            ingress_handshake_timeout_ms: self.ingress_handshake_timeout_ms,
+            callback_handshake_timeout_ms: self.callback_handshake_timeout_ms,
+            max_ingress_connections: self.max_ingress_connections,
+            max_callback_handshakes: self.max_callback_handshakes,
         });
         Ok(RuntimeConfig {
             config,
@@ -209,7 +233,7 @@ impl ServerCli {
 #[command(
     name = "lfp-pipe-client",
     version,
-    about = "Connect private TCP backends to an lfp-pipe public server"
+    about = "Connect private TCP backends to an lfp-pipe ingress"
 )]
 struct ClientCli {
     #[command(flatten)]
@@ -235,7 +259,7 @@ struct ClientCli {
     #[arg(long, env = "LFP_PIPE_REQUEST_SUBJECT", value_name = "SUBJECT")]
     request_subject: Option<String>,
 
-    /// Milliseconds to wait for the server's claim decision.
+    /// Milliseconds to wait for the ingress claim decision.
     #[arg(long, env = "LFP_PIPE_CLAIM_ACK_TIMEOUT_MS", value_name = "MS")]
     claim_ack_timeout_ms: Option<u64>,
 
@@ -309,10 +333,10 @@ impl ClientCli {
     }
 }
 
-/// Parse and layer server configuration from CLI flags, environment, and TOML.
-pub fn parse_server_runtime() -> anyhow::Result<RuntimeConfig<ServerConfig>> {
+/// Parse and layer ingress configuration from CLI flags, environment, and TOML.
+pub fn parse_ingress_runtime() -> anyhow::Result<RuntimeConfig<IngressConfig>> {
     hydrate_file_backed_environment()?;
-    ServerCli::parse().load()
+    IngressCli::parse().load()
 }
 
 /// Parse and layer client configuration from CLI flags, environment, and TOML.
@@ -330,18 +354,18 @@ mod tests {
 
     use clap::CommandFactory;
 
-    use super::{ClientCli, ServerCli, load_file_backed_value};
+    use super::{ClientCli, IngressCli, load_file_backed_value};
 
     #[test]
-    fn server_help_exposes_flags_and_environment_variables() {
-        let command = ServerCli::command();
+    fn ingress_help_exposes_flags_and_environment_variables() {
+        let command = IngressCli::command();
         let config = command
             .get_arguments()
             .find(|argument| argument.get_id() == "config")
             .expect("config argument");
         assert_eq!(config.get_env(), Some(OsStr::new("LFP_PIPE_CONFIG")));
 
-        let help = ServerCli::command().render_long_help().to_string();
+        let help = IngressCli::command().render_long_help().to_string();
         assert!(help.contains("--public-listen"));
         assert!(help.contains("LFP_PIPE_PUBLIC_LISTEN"));
         assert!(help.contains("--log-filter"));

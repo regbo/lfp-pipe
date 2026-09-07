@@ -3,10 +3,10 @@ set -eu
 
 # Override this only when migrating an installation to a nonstandard appdata path.
 APP_DIR="${LFP_PIPE_HOME:-/mnt/user/appdata/lfp-pipe}"
-BIN="$APP_DIR/bin/lfp-pipe-server"
-CONFIG="$APP_DIR/etc/server.toml"
-LOG="$APP_DIR/log/server.log"
-PID_FILE="$APP_DIR/run/server.pid"
+BIN="$APP_DIR/bin/lfp-pipe-ingress"
+CONFIG="$APP_DIR/etc/ingress.toml"
+LOG="$APP_DIR/log/ingress.log"
+PID_FILE="$APP_DIR/run/ingress.pid"
 ACTION="${1:-start}"
 
 running_pid() {
@@ -21,7 +21,7 @@ running_pid() {
 start_server() {
     install -d -m 0755 "$APP_DIR/log" "$APP_DIR/run"
     if pid="$(running_pid)"; then
-        echo "lfp-pipe server already running as PID $pid"
+        echo "lfp-pipe ingress already running as PID $pid"
         return
     fi
     rm -f "$PID_FILE"
@@ -33,16 +33,16 @@ start_server() {
     printf '%s\n' "$pid" >"$PID_FILE"
     sleep 1
     kill -0 "$pid" 2>/dev/null || {
-        echo "lfp-pipe server failed to start; inspect $LOG" >&2
+        echo "lfp-pipe ingress failed to start; inspect $LOG" >&2
         rm -f "$PID_FILE"
         exit 1
     }
-    echo "lfp-pipe server started as PID $pid"
+    echo "lfp-pipe ingress started as PID $pid"
 }
 
 stop_server() {
     if ! pid="$(running_pid)"; then
-        echo "lfp-pipe server is not running"
+        echo "lfp-pipe ingress is not running"
         rm -f "$PID_FILE"
         return
     fi
@@ -52,11 +52,11 @@ stop_server() {
         sleep 0.5
     done
     if kill -0 "$pid" 2>/dev/null; then
-        echo "lfp-pipe server did not stop cleanly" >&2
+        echo "lfp-pipe ingress did not stop cleanly" >&2
         exit 1
     fi
     rm -f "$PID_FILE"
-    echo "lfp-pipe server stopped"
+    echo "lfp-pipe ingress stopped"
 }
 
 case "$ACTION" in
@@ -65,9 +65,9 @@ case "$ACTION" in
     restart) stop_server; start_server ;;
     status)
         if pid="$(running_pid)"; then
-            echo "lfp-pipe server running as PID $pid"
+            echo "lfp-pipe ingress running as PID $pid"
         else
-            echo "lfp-pipe server is not running"
+            echo "lfp-pipe ingress is not running"
             exit 1
         fi
         ;;

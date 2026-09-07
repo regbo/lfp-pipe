@@ -82,7 +82,7 @@ services:
       LFP_AUTH_NATS_CALLOUT_PASSWORD_FILE: /run/secrets/nats_callout_password
       LFP_AUTH_NATS_ISSUER_SEED_FILE: /run/secrets/nats_auth_issuer_seed
       LFP_AUTH_NATS_XKEY_SEED_FILE: /run/secrets/nats_auth_xkey_seed
-      LFP_AUTH_NATS_INTERNAL_SERVER_TOKEN_FILE: /run/secrets/nats_internal_server_token
+      LFP_AUTH_NATS_INTERNAL_INGRESS_TOKEN_FILE: /run/secrets/nats_internal_ingress_token
       LFP_AUTH_NATS_TUNNEL_ACCOUNT: TUNNELS
       LFP_AUTH_NATS_SUBJECT_PREFIX: lfp.v1.connect
       LFP_AUTH_TICKET_TTL_MINUTES: ${TICKET_TTL_MINUTES:-30}
@@ -94,7 +94,7 @@ services:
       - nats_callout_password
       - nats_auth_issuer_seed
       - nats_auth_xkey_seed
-      - nats_internal_server_token
+      - nats_internal_ingress_token
     networks:
       - control
     healthcheck:
@@ -150,18 +150,18 @@ services:
         - traefik.http.routers.lfp-pipe-manage.service=lfp-pipe-manage
         - traefik.http.services.lfp-pipe-manage.loadbalancer.server.port=8080
 
-  server:
-    image: ${SERVER_IMAGE?Variable not set}
-    command: ["--config", "/etc/lfp-pipe/server.toml"]
+  ingress:
+    image: ${INGRESS_IMAGE?Variable not set}
+    command: ["--config", "/etc/lfp-pipe/ingress.toml"]
     environment:
       # Swarm renders Node.Hostname per task, keeping callbacks on the same
       # manager that accepted the public connection.
       LFP_PIPE_ADVERTISED_DATA_ADDR: "{{.Node.Hostname}}.${DOMAIN?Variable not set}:7001"
     configs:
-      - source: server_config
-        target: /etc/lfp-pipe/server.toml
+      - source: ingress_config
+        target: /etc/lfp-pipe/ingress.toml
     secrets:
-      - nats_internal_server_token
+      - nats_internal_ingress_token
     networks:
       - control
       - traefik-public
@@ -206,9 +206,9 @@ configs:
   nats_config:
     external: true
     name: ${NATS_CONFIG_NAME?Variable not set}
-  server_config:
+  ingress_config:
     external: true
-    name: ${SERVER_CONFIG_NAME?Variable not set}
+    name: ${INGRESS_CONFIG_NAME?Variable not set}
 
 secrets:
   authentik_client_secret:
@@ -235,9 +235,9 @@ secrets:
   nats_auth_xkey_seed:
     external: true
     name: ${NATS_AUTH_XKEY_SEED_NAME?Variable not set}
-  nats_internal_server_token:
+  nats_internal_ingress_token:
     external: true
-    name: ${NATS_INTERNAL_SERVER_TOKEN_NAME?Variable not set}
+    name: ${NATS_INTERNAL_INGRESS_TOKEN_NAME?Variable not set}
 
 networks:
   control:
