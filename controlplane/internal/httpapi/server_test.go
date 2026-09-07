@@ -2,12 +2,18 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/securecookie"
 	authentikapi "github.com/regbo/lfp-pipe/controlplane/internal/authentik"
+	"golang.org/x/oauth2"
 )
 
 func TestDefaultManagedClientConfigEnablesTLSTermination(t *testing.T) {
@@ -161,5 +167,100 @@ func TestIdentityProvisioningInputValidation(t *testing.T) {
 	}
 	if _, err := normalizeIdentityCallbackPath("/oauth/callback?next=x"); err == nil {
 		t.Fatal("expected non-reserved callback to be rejected")
+	}
+}
+
+func TestSafeReturnToAllowsOnlyLocalApplicationPaths(t *testing.T) {
+	t.Parallel()
+	longPath := "/" + strings.Repeat("a", maxReturnToLength)
+	tests := map[string]string{
+		"":                              "/",
+		"/machines?tab=routes#path-1":   "/machines?tab=routes#path-1",
+		"settings":                      "/",
+		"https://attacker.example/path": "/",
+		"//attacker.example/path":       "/",
+		"/%2f%2fattacker.example/path":  "/",
+		"/api/auth/callback":            "/",
+		"/machines\\attacker.example":   "/",
+		longPath:                        "/",
+	}
+	for input, expected := range tests {
+		if got := safeReturnTo(input); got != expected {
+			t.Errorf("safeReturnTo(%q) = %q, want %q", input, got, expected)
+		}
+	}
+}
+
+func TestLoginKeepsBoundedConcurrentOIDCFlows(t *testing.T) {
+	t.Parallel()
+	server := newOIDCTestServer()
+	var flowCookieValue *http.Cookie
+	for index := 0; index < maxOIDCFlows+2; index++ {
+		returnTo := "/page-" + strconv.Itoa(index)
+		request := httptest.NewRequest(http.MethodGet, "http://pipe.example/api/auth/login?return_to="+url.QueryEscape(returnTo), nil)
+		if flowCookieValue != nil {
+			request.AddCookie(flowCookieValue)
+		}
+		response := httptest.NewRecorder()
+		server.login(response, request)
+		if response.Code != http.StatusFound {
+			t.Fatalf("login %d returned %d", index, response.Code)
+		}
+		flowCookieValue = response.Result().Cookies()[0]
+	}
+
+	var stored oidcFlowCookie
+	if err := server.cookies.Decode(flowCookie, flowCookieValue.Value, &stored); err != nil {
+		t.Fatalf("decode flow cookie: %v", err)
+	}
+	if len(stored.Flows) != maxOIDCFlows {
+		t.Fatalf("stored %d flows, want %d", len(stored.Flows), maxOIDCFlows)
+	}
+	if stored.Flows[0].ReturnTo != "/page-2" || stored.Flows[len(stored.Flows)-1].ReturnTo != "/page-5" {
+		t.Fatalf("unexpected bounded flows: %#v", stored.Flows)
+	}
+}
+
+func TestConsumeOIDCFlowMatchesStateAndPreservesOthers(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(100, 0)
+	flows := []oidcFlow{
+		{State: "expired", Verifier: "expired", ReturnTo: "/expired", Expires: now.Add(-time.Second).Unix()},
+		{State: "first", Verifier: "first-verifier", ReturnTo: "/first", Expires: now.Add(time.Minute).Unix()},
+		{State: "second", Verifier: "second-verifier", ReturnTo: "/second", Expires: now.Add(time.Minute).Unix()},
+	}
+	flow, remaining, found := consumeOIDCFlow(flows, "first", now)
+	if !found || flow.ReturnTo != "/first" {
+		t.Fatalf("unexpected selected flow: %#v, found=%v", flow, found)
+	}
+	if len(remaining) != 1 || remaining[0].State != "second" {
+		t.Fatalf("unexpected remaining flows: %#v", remaining)
+	}
+}
+
+func TestStaleCallbackRedirectsAnAuthenticatedBrowser(t *testing.T) {
+	t.Parallel()
+	server := newOIDCTestServer()
+	value, err := server.cookies.Encode(sessionCookie, browserSession{Subject: "user", ExpiresUnix: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatalf("encode session: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://pipe.example/api/auth/callback?state=stale", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: value})
+	response := httptest.NewRecorder()
+	server.callback(response, request)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "/" {
+		t.Fatalf("stale authenticated callback returned %d to %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func newOIDCTestServer() *Server {
+	return &Server{
+		oauth: oauth2.Config{
+			ClientID:    "client",
+			Endpoint:    oauth2.Endpoint{AuthURL: "https://auth.example/authorize"},
+			RedirectURL: "https://pipe.example/api/auth/callback",
+		},
+		cookies: securecookie.New([]byte(strings.Repeat("h", 32)), []byte(strings.Repeat("b", 32))),
 	}
 }

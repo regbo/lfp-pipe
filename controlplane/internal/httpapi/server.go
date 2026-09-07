@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,9 @@ import (
 const (
 	sessionCookie         = "lfp_connect_session"
 	flowCookie            = "lfp_connect_oidc_flow"
+	oidcFlowLifetime      = 10 * time.Minute
+	maxOIDCFlows          = 4
+	maxReturnToLength     = 512
 	devicePresenceSubject = "lfp.control.devices.presence"
 	deviceConfigSubject   = "lfp.control.devices.config"
 	deviceOnlineLease     = 45 * time.Second
@@ -175,7 +179,12 @@ type browserSession struct {
 type oidcFlow struct {
 	State    string `json:"state"`
 	Verifier string `json:"verifier"`
+	ReturnTo string `json:"return_to"`
 	Expires  int64  `json:"expires"`
+}
+
+type oidcFlowCookie struct {
+	Flows []oidcFlow `json:"flows"`
 }
 
 // New discovers Authentik and constructs the API handler.
@@ -1008,8 +1017,16 @@ func ownedEntitlement(values []string, requested, parent string) (string, error)
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	state := oauth2.GenerateVerifier()
 	verifier := oauth2.GenerateVerifier()
-	flow := oidcFlow{State: state, Verifier: verifier, Expires: time.Now().Add(10 * time.Minute).Unix()}
-	if err := s.setCookie(w, flowCookie, flow, 10*time.Minute); err != nil {
+	flows, _ := s.readOIDCFlows(r)
+	flows = activeOIDCFlows(flows, time.Now())
+	flows = append(flows, oidcFlow{
+		State: state, Verifier: verifier, ReturnTo: safeReturnTo(r.URL.Query().Get("return_to")),
+		Expires: time.Now().Add(oidcFlowLifetime).Unix(),
+	})
+	if len(flows) > maxOIDCFlows {
+		flows = flows[len(flows)-maxOIDCFlows:]
+	}
+	if err := s.setCookie(w, flowCookie, oidcFlowCookie{Flows: flows}, oidcFlowLifetime); err != nil {
 		s.internalError(w, err)
 		return
 	}
@@ -1017,9 +1034,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
-	var flow oidcFlow
-	if err := s.readCookie(r, flowCookie, &flow); err != nil || flow.Expires < time.Now().Unix() || r.URL.Query().Get("state") != flow.State {
+	flows, err := s.readOIDCFlows(r)
+	flow, remaining, found := consumeOIDCFlow(flows, r.URL.Query().Get("state"), time.Now())
+	if err != nil || !found {
+		if _, sessionErr := s.requireSession(r); sessionErr == nil {
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
 		writeError(w, http.StatusBadRequest, "The sign-in request expired. Please try again.")
+		return
+	}
+	if len(remaining) == 0 {
+		s.clearCookie(w, flowCookie)
+	} else if err := s.setCookie(w, flowCookie, oidcFlowCookie{Flows: remaining}, oidcFlowLifetime); err != nil {
+		s.internalError(w, err)
 		return
 	}
 	oauthToken, err := s.oauth.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(flow.Verifier))
@@ -1065,8 +1093,61 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	s.clearCookie(w, flowCookie)
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, safeReturnTo(flow.ReturnTo), http.StatusFound)
+}
+
+func (s *Server) readOIDCFlows(r *http.Request) ([]oidcFlow, error) {
+	var cookie oidcFlowCookie
+	if err := s.readCookie(r, flowCookie, &cookie); err == nil {
+		return cookie.Flows, nil
+	} else {
+		var legacy oidcFlow
+		if legacyErr := s.readCookie(r, flowCookie, &legacy); legacyErr == nil && legacy.State != "" {
+			return []oidcFlow{legacy}, nil
+		}
+		return nil, err
+	}
+}
+
+func activeOIDCFlows(flows []oidcFlow, now time.Time) []oidcFlow {
+	active := make([]oidcFlow, 0, len(flows))
+	for _, flow := range flows {
+		if flow.State == "" || flow.Verifier == "" || flow.Expires < now.Unix() {
+			continue
+		}
+		flow.ReturnTo = safeReturnTo(flow.ReturnTo)
+		active = append(active, flow)
+	}
+	if len(active) > maxOIDCFlows {
+		active = active[len(active)-maxOIDCFlows:]
+	}
+	return active
+}
+
+func consumeOIDCFlow(flows []oidcFlow, state string, now time.Time) (oidcFlow, []oidcFlow, bool) {
+	active := activeOIDCFlows(flows, now)
+	for index, flow := range active {
+		if subtle.ConstantTimeCompare([]byte(state), []byte(flow.State)) != 1 {
+			continue
+		}
+		remaining := make([]oidcFlow, 0, len(active)-1)
+		remaining = append(remaining, active[:index]...)
+		remaining = append(remaining, active[index+1:]...)
+		return flow, remaining, true
+	}
+	return oidcFlow{}, active, false
+}
+
+func safeReturnTo(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" || len(candidate) > maxReturnToLength || !strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "//") || strings.Contains(candidate, "\\") {
+		return "/"
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") || parsed.Path == "/api" || strings.HasPrefix(parsed.Path, "/api/") {
+		return "/"
+	}
+	return candidate
 }
 
 func (s *Server) logout(w http.ResponseWriter, _ *http.Request) {

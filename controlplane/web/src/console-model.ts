@@ -177,10 +177,21 @@ export function configRoutes(principal: ServicePrincipal, toml: string): RouteSu
   }
 }
 
+let loginRedirectStarted = false;
+
+function redirectToLogin() {
+  if (loginRedirectStarted) return;
+  loginRedirectStarted = true;
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const loginURL = new URL("/api/auth/login", window.location.origin);
+  loginURL.searchParams.set("return_to", returnTo);
+  window.location.replace(`${loginURL.pathname}${loginURL.search}`);
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: "same-origin", ...init });
   if (response.status === 401) {
-    window.location.replace("/api/auth/login");
+    redirectToLogin();
     throw new Error("Authentication required.");
   }
   const body = response.status === 204 ? undefined : await response.json();
