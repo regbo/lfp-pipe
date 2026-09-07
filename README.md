@@ -399,7 +399,9 @@ For an ephemeral pinned invocation, use:
 mise exec github:regbo/lfp-pipe@0.1.1 -- lfp-pipe-ingress --version
 ```
 
-Build local assets and create the next tag from a clean worktree with:
+Update the centralized workspace version, build local assets, verify the
+binaries report that version, and create the release commit and tag from a
+clean worktree with:
 
 ```text
 mise run version:bump patch
@@ -407,9 +409,9 @@ mise run version:bump minor --push
 mise run version:bump major
 ```
 
-Pass `--push` to upload the local assets, publish the GitHub release, and start
-the missing-target Actions matrix. A plain bump leaves the tag and assets local
-for inspection.
+Pass `--push` to push the release commit and tag, upload the local assets,
+publish the GitHub release, and start the missing-target Actions matrix. A
+plain bump leaves the commit, tag, and assets local for inspection.
 
 ## Deployment
 

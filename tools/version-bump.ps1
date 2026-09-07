@@ -22,10 +22,23 @@ switch ($level) {
     "patch" { $patch++ }
 }
 $next = "v$major.$minor.$patch"
+$nextVersion = $next.TrimStart("v")
 git rev-parse --verify --quiet "refs/tags/$next" *> $null
 if ($LASTEXITCODE -eq 0) { throw "tag already exists: $next" }
 
 $repoRoot = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim())
+$manifestPath = Join-Path $repoRoot "Cargo.toml"
+$manifest = [IO.File]::ReadAllText($manifestPath)
+$versionPattern = [regex]'(?m)^version = "[^"]+"$'
+if ($versionPattern.Matches($manifest).Count -ne 1) {
+    throw "expected exactly one workspace package version in $manifestPath"
+}
+$updatedManifest = $versionPattern.Replace($manifest, "version = `"$nextVersion`"", 1)
+[IO.File]::WriteAllText($manifestPath, $updatedManifest, [Text.UTF8Encoding]::new($false))
+
+cargo metadata --format-version 1 --no-deps | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $releaseParent = [IO.Path]::GetFullPath((Join-Path $repoRoot "dist\local-release"))
 $releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent $next))
 if (-not $releaseRoot.StartsWith($releaseParent + [IO.Path]::DirectorySeparatorChar)) {
@@ -41,6 +54,14 @@ cargo test --workspace --release --locked --target $windowsTarget
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cargo build --workspace --release --locked --target $windowsTarget
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$windowsReleaseBin = Join-Path $repoRoot "target\$windowsTarget\release"
+foreach ($binary in @("lfp-pipe-ingress.exe", "lfp-pipe-client.exe")) {
+    $reportedVersion = & (Join-Path $windowsReleaseBin $binary) --version
+    if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch " $([regex]::Escape($nextVersion))$") {
+        throw "$binary reported '$reportedVersion'; expected $nextVersion"
+    }
+}
 
 $windowsArchive = "lfp-pipe-$next-$windowsTarget"
 $windowsDirectory = Join-Path $releaseRoot $windowsArchive
@@ -59,16 +80,23 @@ if (-not (Test-Path -LiteralPath $linuxAsset)) {
     throw "Linux x64 release asset was not produced: $linuxAsset"
 }
 
+git add -- Cargo.toml Cargo.lock
+git commit -m "Release $next"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 git tag -a $next -m "Release $next"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Write-Output "created $next from $current with local Windows and Linux x64 assets"
+Write-Output "created the $next release commit and tag from $current with local Windows and Linux x64 assets"
 
 if ($env:usage_push -eq "true") {
     $head = (git rev-parse HEAD).Trim()
+    $base = (git rev-parse HEAD^).Trim()
     $remoteMain = ((git ls-remote origin refs/heads/main) -split "\s+")[0]
-    if ($head -ne $remoteMain) {
-        throw "origin/main must point to $head before publishing $next"
+    if ($base -ne $remoteMain) {
+        throw "origin/main must point to the release commit's parent $base before publishing $next"
     }
+    git push origin "${head}:refs/heads/main"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     git push origin $next
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     gh release create $next $windowsAsset $linuxAsset --draft --verify-tag --generate-notes --title $next
