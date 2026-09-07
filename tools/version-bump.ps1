@@ -36,7 +36,7 @@ if ($versionPattern.Matches($manifest).Count -ne 1) {
 $updatedManifest = $versionPattern.Replace($manifest, "version = `"$nextVersion`"", 1)
 [IO.File]::WriteAllText($manifestPath, $updatedManifest, [Text.UTF8Encoding]::new($false))
 
-cargo metadata --format-version 1 --no-deps | Out-Null
+cargo metadata --format-version 1 | Out-Null
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $releaseParent = [IO.Path]::GetFullPath((Join-Path $repoRoot "dist\local-release"))

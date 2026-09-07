@@ -45,7 +45,7 @@ awk -v next_version="$next_version" '
 ' "$manifest" > "$manifest_temp"
 mv "$manifest_temp" "$manifest"
 
-cargo metadata --format-version 1 --no-deps >/dev/null
+cargo metadata --format-version 1 >/dev/null
 
 release_parent="$repo_root/dist/local-release"
 release_root="$release_parent/$next"
