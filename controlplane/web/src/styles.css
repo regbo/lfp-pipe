@@ -255,6 +255,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
   .machine-facts > div:nth-child(3) { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-line); }
   .machine-facts > div:nth-child(4) { border-top: 1px solid var(--color-line); }
   .config-root-section { padding: 18px 14px; }
+  .route-config::before { content: none; }
   .route-body { padding-left: 0; }
   .path-fields { grid-template-columns: 1fr; }
   .path-fields > .checkbox-field { margin-top: 0; }
