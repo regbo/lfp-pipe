@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { Button, Group, Menu, Modal, Select, TextInput, UnstyledButton } from "@mantine/core";
-import { ConfigEditor } from "./config-editor";
+import { ConfigEditor, validateConfigToml } from "./config-editor";
 import {
   AccessPage,
   KeysPage,
@@ -70,6 +70,21 @@ function downloadBlob(name: string, body: BlobPart, type: string) {
   anchor.download = name;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function focusFirstConfigError() {
+  requestAnimationFrame(() => {
+    const target = window.document.querySelector<HTMLElement>("[data-config-error='true']");
+    if (!target) return;
+    const closedDisclosure = target.closest(".mantine-Accordion-item")?.querySelector<HTMLButtonElement>("button[aria-expanded='false']");
+    closedDisclosure?.click();
+    requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+      const control = target.matches("input, button, [tabindex]") ? target : target.querySelector<HTMLElement>("input, button, [tabindex]");
+      control?.focus();
+      if (control instanceof HTMLInputElement) control.reportValidity();
+    });
+  });
 }
 
 export function ManagementConsole() {
@@ -294,6 +309,13 @@ export function ManagementConsole() {
 
   async function saveConfig() {
     if (!editingPrincipal || !configDirty) return;
+    const validationErrors = validateConfigToml(centralConfig);
+    const validationErrorCount = Object.keys(validationErrors).length;
+    if (validationErrorCount > 0) {
+      setError(`Fix ${validationErrorCount} required configuration ${validationErrorCount === 1 ? "field" : "fields"} before saving.`);
+      focusFirstConfigError();
+      return;
+    }
     setConfigSaving(true);
     setError("");
     try {
@@ -499,7 +521,7 @@ http_backend_addr = ":80"
     <div className="mobile-header"><button type="button" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}><MenuIcon size={20} /></button><Brand settings={brand} /></div>
 
     <main className={`console-main${editingPrincipal ? " configuration-main" : ""}`} id="main-content">
-      {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={setCentralConfig} provisioning={identityProvisioning} identityGroups={identityGroups} onLoadIdentityGroups={loadIdentityGroups} onProvisionIdentity={provisionIdentity} /></MachineDetail> : null}
+      {editingPrincipal ? <MachineDetail client={managedClients.find((client) => client.username === editingPrincipal.username)} principal={editingPrincipal} identity={identity} loading={loadingConfigFor === editingPrincipal.username} dirty={configDirty} saving={configSaving} onBack={requestCloseConfig} onSave={() => void saveConfig()} onExport={exportCurrentConfig} onDelete={setDeleteCandidate}><ConfigEditor key={editingPrincipal.id} toml={centralConfig} onChange={(value) => { setCentralConfig(value); if (error.startsWith("Fix ") && error.endsWith(" before saving.")) setError(""); }} provisioning={identityProvisioning} identityGroups={identityGroups} onLoadIdentityGroups={loadIdentityGroups} onProvisionIdentity={provisionIdentity} /></MachineDetail> : null}
       {!editingPrincipal && activePage === "machines" && selectedClient ? <MachineDetail client={selectedClient} principal={principalByUsername.get(selectedClient.username)} identity={identity} loading={false} dirty={false} saving={false} onBack={() => setSelectedMachine("")} onSave={() => undefined} onExport={() => undefined} onDelete={setDeleteCandidate} /> : null}
       {!editingPrincipal && activePage === "machines" && !selectedClient ? <MachinesPage clients={managedClients} enrollments={enrollments} principals={principalByUsername} routes={routesByUsername} loading={devicesLoading} error={devicesError} search={machineSearch} filter={machineFilter} selected={selectedPrincipals} onSearch={setMachineSearch} onFilter={setMachineFilter} onOpen={openMachine} onEdit={(principal) => void editConfig(principal)} onDelete={setDeleteCandidate} onApprove={(enrollment) => void claimEnrollment(enrollment)} onToggle={togglePrincipal} onCreate={openCreation} onExport={() => void downloadSelectedConfigs()} /> : null}
       {!editingPrincipal && activePage === "routes" ? <RoutesPage routes={routes} search={routeSearch} onSearch={setRouteSearch} onEdit={(principal) => void editConfig(principal)} onAdd={() => setRouteMachineOpen(true)} /> : null}

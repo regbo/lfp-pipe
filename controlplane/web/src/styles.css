@@ -157,10 +157,13 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .config-section-heading span { color: var(--color-muted); font-size: 11px; }
 .field-span-wide { grid-column: span 2; }
 .field-span-full { grid-column: 1 / -1; }
-.settings-disclosure .mantine-Accordion-item, .route-disclosure .mantine-Accordion-item { overflow: hidden; border: 1px solid var(--color-line); border-radius: var(--radius-sm); }
-.settings-disclosure .mantine-Accordion-control, .route-disclosure .mantine-Accordion-control { min-height: 39px; padding-inline: 11px; color: var(--color-muted); font-size: 11px; font-weight: 650; }
-.settings-disclosure .mantine-Accordion-control:hover, .route-disclosure .mantine-Accordion-control:hover, .settings-disclosure .mantine-Accordion-control[aria-expanded="true"], .route-disclosure .mantine-Accordion-control[aria-expanded="true"] { color: var(--color-text); background: var(--color-surface-soft); }
-.settings-disclosure .mantine-Accordion-content, .route-disclosure .mantine-Accordion-content { padding: 12px; }
+.settings-disclosure .mantine-Accordion-item, .route-disclosure .mantine-Accordion-item, .authorization-disclosure .mantine-Accordion-item { overflow: hidden; border: 1px solid var(--color-line); border-radius: var(--radius-sm); }
+.settings-disclosure .mantine-Accordion-control, .route-disclosure .mantine-Accordion-control, .authorization-disclosure .mantine-Accordion-control { min-height: 39px; padding-inline: 11px; color: var(--color-muted); font-size: 11px; font-weight: 650; }
+.settings-disclosure .mantine-Accordion-control:hover, .route-disclosure .mantine-Accordion-control:hover, .authorization-disclosure .mantine-Accordion-control:hover, .settings-disclosure .mantine-Accordion-control[aria-expanded="true"], .route-disclosure .mantine-Accordion-control[aria-expanded="true"], .authorization-disclosure .mantine-Accordion-control[aria-expanded="true"] { color: var(--color-text); background: var(--color-surface-soft); }
+.settings-disclosure .mantine-Accordion-content, .route-disclosure .mantine-Accordion-content, .authorization-disclosure .mantine-Accordion-content { padding: 12px; }
+.authorization-policy { display: grid; gap: 9px; }
+.authorization-disclosure .mantine-Accordion-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.disclosure-error { color: var(--color-danger); font-size: 10px; font-weight: 650; }
 .settings-group { display: grid; gap: 9px; }
 .settings-group + .settings-group { padding-top: 15px; border-top: 1px solid var(--color-line); }
 .settings-group h3, .path-list-heading strong, .path-header strong { margin: 0; color: var(--color-muted); font-size: 10px; font-weight: 720; letter-spacing: 0.07em; text-transform: uppercase; }
@@ -207,6 +210,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .inheritance-control { width: max-content; }
 .inheritance-control .mantine-SegmentedControl-label { padding-inline: 8px; font-size: 10px; }
 .inheritance-value { color: var(--color-muted); font-size: 9px; line-height: 12px; }
+.inline-field-error { margin: 0; color: var(--color-danger); font-size: 10px; line-height: 1.35; }
 .inherited-policy { min-height: 34px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; color: var(--color-muted); background: var(--color-surface-soft); border-radius: var(--radius-sm); font-size: 11px; }
 .inheritance-dot { width: 7px; height: 7px; flex: none; background: var(--color-muted); border-radius: 50%; opacity: 0.55; }
 .routes-empty { min-height: 110px; display: grid; place-items: center; align-content: center; gap: 4px; color: var(--color-muted); border: 1px dashed var(--color-line-strong); border-radius: var(--radius-sm); text-align: center; }
