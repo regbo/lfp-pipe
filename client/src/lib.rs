@@ -85,6 +85,10 @@ pub(crate) fn select_runtime_for_path<'a>(
         })
 }
 
+pub(crate) fn protocol_allowed(http: bool, tcp_passthrough: bool) -> bool {
+    http || tcp_passthrough
+}
+
 /// Subscribe for matching requests and bridge accepted tunnels to backends.
 pub async fn run(config: ClientConfig) -> anyhow::Result<()> {
     // NATS and HTTPS share Rustls but enable different provider defaults. Select
@@ -279,6 +283,7 @@ async fn process_messages(
             acme_config,
             backends.clone(),
             config.relay_mode,
+            config.tcp_passthrough,
         )?)
     } else {
         None
@@ -374,6 +379,7 @@ async fn handle_request(message: Message, state: AppState) -> anyhow::Result<()>
         state.backends.clone(),
         state.config.relay_mode,
         state.acme.as_ref(),
+        state.config.tcp_passthrough,
     )
     .await
 }
@@ -434,6 +440,7 @@ async fn bridge_connection(
     backends: Arc<Vec<BackendRuntime>>,
     relay_mode: RelayMode,
     acme: Option<&acme::AcmeRuntime>,
+    tcp_passthrough: bool,
 ) -> anyhow::Result<()> {
     let mut ingress_stream = TcpStream::connect(&request.ingress_callback_addr)
         .await
@@ -450,7 +457,8 @@ async fn bridge_connection(
         .await
         .context("failed to write prefix envelope")?;
 
-    let inspect_http = acme.is_some()
+    let inspect_http = !tcp_passthrough
+        || acme.is_some()
         || backends.iter().any(|backend| {
             backend.rule.http_backend_addr.is_some()
                 || backend.rule.path_prefix.is_some()
@@ -468,6 +476,14 @@ async fn bridge_connection(
             "handing tunneled TLS to automatic certificate runtime"
         );
         return acme.accept(ingress_stream, request.client_ip.clone()).await;
+    }
+    if !protocol_allowed(plaintext_http, tcp_passthrough) {
+        debug!(
+            connection_id = %request.connection_id,
+            client_id,
+            "rejected non-HTTP connection because TCP passthrough is disabled"
+        );
+        return Ok(());
     }
     let fallback = backends
         .iter()
@@ -556,6 +572,14 @@ mod tests {
         let selected = select_backend(&rules, Some("api.example.com")).expect("match");
         assert_eq!(selected.backend_addr, "127.0.0.1:443");
         assert_eq!(selected.resolved_http_backend_addr(), "127.0.0.1:80");
+    }
+
+    #[test]
+    fn http_only_routes_reject_non_http_protocols() {
+        assert!(protocol_allowed(true, false));
+        assert!(protocol_allowed(true, true));
+        assert!(protocol_allowed(false, true));
+        assert!(!protocol_allowed(false, false));
     }
 
     #[tokio::test]

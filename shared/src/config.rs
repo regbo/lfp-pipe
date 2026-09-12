@@ -243,6 +243,9 @@ pub struct ClientConfig {
     /// Optional JWT policy enforced before any HTTP request reaches a backend.
     #[serde(default)]
     pub authorization: Option<ClientAuthorizationConfig>,
+    /// Allow non-HTTP connections to use the fallback backend.
+    #[serde(default = "default_true")]
+    pub tcp_passthrough: bool,
     /// Stream-copy implementation used between callback and backend sockets.
     #[serde(default)]
     pub relay_mode: RelayMode,
@@ -449,6 +452,9 @@ pub struct ClientConfigDefaults {
     /// Default JWT authorization settings shared by protected routes.
     #[serde(default)]
     pub authorization: Option<ClientAuthorizationDefaults>,
+    /// Default non-HTTP TCP passthrough behavior.
+    #[serde(default)]
+    pub tcp_passthrough: Option<bool>,
     /// Default stream-copy implementation.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -633,6 +639,9 @@ pub struct ClientRouteConfig {
     /// Route-specific JWT policy layered over shared authorization defaults.
     #[serde(default)]
     pub authorization: Option<ClientAuthorizationDefaults>,
+    /// Route-specific non-HTTP TCP passthrough override.
+    #[serde(default)]
+    pub tcp_passthrough: Option<bool>,
     /// Route-specific stream-copy implementation override.
     #[serde(default)]
     pub relay_mode: Option<RelayMode>,
@@ -1177,13 +1186,15 @@ fn expand_client_route(
         authorization: None,
     }];
     for path_route in route.path_routes {
-        let path_authorization = merge_authorization_defaults(
-            route
-                .authorization
-                .as_ref()
-                .or(defaults.authorization.as_ref()),
+        let authorization_layers = [
             path_route.authorization.as_ref(),
-        )?;
+            route.authorization.as_ref(),
+            defaults.authorization.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let path_authorization = merge_authorization_layers(&authorization_layers)?;
         backend_rules.push(BackendRule {
             pattern: pattern.clone(),
             path_prefix: Some(path_route.path_prefix),
@@ -1209,6 +1220,10 @@ fn expand_client_route(
         oauth,
         acme,
         authorization,
+        tcp_passthrough: route
+            .tcp_passthrough
+            .or(defaults.tcp_passthrough)
+            .unwrap_or(true),
         relay_mode: route.relay_mode.or(defaults.relay_mode).unwrap_or_default(),
         request_subject: route
             .request_subject
@@ -1226,25 +1241,33 @@ fn merge_authorization_defaults(
     defaults: Option<&ClientAuthorizationDefaults>,
     route: Option<&ClientAuthorizationDefaults>,
 ) -> anyhow::Result<Option<ClientAuthorizationConfig>> {
-    if defaults.is_none() && route.is_none() {
+    let layers = [route, defaults].into_iter().flatten().collect::<Vec<_>>();
+    merge_authorization_layers(&layers)
+}
+
+/// Resolve authorization settings from highest to lowest precedence.
+///
+/// Paths need three layers (path, route, machine defaults); resolving only the
+/// nearest non-empty parent loses required fields from the machine defaults.
+fn merge_authorization_layers(
+    layers: &[&ClientAuthorizationDefaults],
+) -> anyhow::Result<Option<ClientAuthorizationConfig>> {
+    if layers.is_empty() {
         return Ok(None);
     }
-    let enabled = route
-        .and_then(|settings| settings.enabled)
-        .or_else(|| defaults.and_then(|settings| settings.enabled))
+    let enabled = layers
+        .iter()
+        .find_map(|settings| settings.enabled)
         .unwrap_or(true);
     if !enabled {
         return Ok(None);
     }
     let non_blank_string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>| {
-        route
-            .and_then(|settings| select(settings).clone())
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                defaults
-                    .and_then(|settings| select(settings).clone())
-                    .filter(|value| !value.trim().is_empty())
-            })
+        layers.iter().find_map(|settings| {
+            select(settings)
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        })
     };
     let required_string_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<String>,
                                  name: &str| {
@@ -1253,75 +1276,62 @@ fn merge_authorization_defaults(
         })
     };
     let list_value = |select: fn(&ClientAuthorizationDefaults) -> &Option<Vec<String>>| {
-        route
-            .and_then(|settings| select(settings).clone())
-            .or_else(|| defaults.and_then(|settings| select(settings).clone()))
+        layers.iter().find_map(|settings| select(settings).clone())
     };
     let non_empty_list_value =
         |select: fn(&ClientAuthorizationDefaults) -> &Option<Vec<String>>| {
-            route
-                .and_then(|settings| select(settings).clone())
-                .filter(|value| !value.is_empty())
-                .or_else(|| {
-                    defaults
-                        .and_then(|settings| select(settings).clone())
-                        .filter(|value| !value.is_empty())
-                })
+            layers
+                .iter()
+                .find_map(|settings| select(settings).clone().filter(|value| !value.is_empty()))
         };
 
     Ok(Some(ClientAuthorizationConfig {
-        bearer: route
-            .and_then(|settings| settings.bearer)
-            .or_else(|| defaults.and_then(|settings| settings.bearer)),
-        oidc: route
-            .and_then(|settings| settings.oidc)
-            .or_else(|| defaults.and_then(|settings| settings.oidc)),
+        bearer: layers.iter().find_map(|settings| settings.bearer),
+        oidc: layers.iter().find_map(|settings| settings.oidc),
         issuer: required_string_value(|settings| &settings.issuer, "issuer")?,
         audiences: non_empty_list_value(|settings| &settings.audiences).unwrap_or_default(),
-        jwks_uri: route
-            .and_then(|settings| settings.jwks_uri.clone())
-            .or_else(|| defaults.and_then(|settings| settings.jwks_uri.clone())),
+        jwks_uri: layers.iter().find_map(|settings| settings.jwks_uri.clone()),
         jwks_cache_file: non_blank_string_value(|settings| &settings.jwks_cache_file)
             .unwrap_or_else(default_jwks_cache_file),
         roles_claim: non_blank_string_value(|settings| &settings.roles_claim)
             .unwrap_or_else(default_roles_claim),
         required_roles: list_value(|settings| &settings.required_roles).unwrap_or_default(),
-        forward_authorization: route
-            .and_then(|settings| settings.forward_authorization)
-            .or_else(|| defaults.and_then(|settings| settings.forward_authorization))
+        forward_authorization: layers
+            .iter()
+            .find_map(|settings| settings.forward_authorization)
             .unwrap_or(false),
-        role_match: route
-            .and_then(|settings| settings.role_match)
-            .or_else(|| defaults.and_then(|settings| settings.role_match))
+        role_match: layers
+            .iter()
+            .find_map(|settings| settings.role_match)
             .unwrap_or_default(),
         algorithms: non_empty_list_value(|settings| &settings.algorithms)
             .unwrap_or_else(default_jwt_algorithms),
-        leeway_seconds: route
-            .and_then(|settings| settings.leeway_seconds)
-            .or_else(|| defaults.and_then(|settings| settings.leeway_seconds))
+        leeway_seconds: layers
+            .iter()
+            .find_map(|settings| settings.leeway_seconds)
             .unwrap_or_else(default_jwt_leeway_seconds),
-        jwks_refresh_seconds: route
-            .and_then(|settings| settings.jwks_refresh_seconds)
-            .or_else(|| defaults.and_then(|settings| settings.jwks_refresh_seconds))
+        jwks_refresh_seconds: layers
+            .iter()
+            .find_map(|settings| settings.jwks_refresh_seconds)
             .unwrap_or_else(default_jwks_refresh_seconds),
-        jwks_max_stale_seconds: route
-            .and_then(|settings| settings.jwks_max_stale_seconds)
-            .or_else(|| defaults.and_then(|settings| settings.jwks_max_stale_seconds))
+        jwks_max_stale_seconds: layers
+            .iter()
+            .find_map(|settings| settings.jwks_max_stale_seconds)
             .unwrap_or_else(default_jwks_max_stale_seconds),
-        header_timeout_ms: route
-            .and_then(|settings| settings.header_timeout_ms)
-            .or_else(|| defaults.and_then(|settings| settings.header_timeout_ms))
+        header_timeout_ms: layers
+            .iter()
+            .find_map(|settings| settings.header_timeout_ms)
             .unwrap_or_else(default_auth_header_timeout_ms),
-        max_header_bytes: route
-            .and_then(|settings| settings.max_header_bytes)
-            .or_else(|| defaults.and_then(|settings| settings.max_header_bytes))
+        max_header_bytes: layers
+            .iter()
+            .find_map(|settings| settings.max_header_bytes)
             .unwrap_or_else(default_auth_max_header_bytes),
         oidc_client_id: non_blank_string_value(|settings| &settings.oidc_client_id),
         // An explicit empty secret file is meaningful: it turns a path inherited
         // from a confidential client into a public PKCE client.
-        oidc_client_secret_file: route
-            .and_then(|settings| settings.oidc_client_secret_file.clone())
-            .or_else(|| defaults.and_then(|settings| settings.oidc_client_secret_file.clone())),
+        oidc_client_secret_file: layers
+            .iter()
+            .find_map(|settings| settings.oidc_client_secret_file.clone()),
         oidc_scopes: non_empty_list_value(|settings| &settings.oidc_scopes)
             .unwrap_or_else(default_browser_oidc_scopes),
         oidc_callback_path: non_blank_string_value(|settings| &settings.oidc_callback_path)
@@ -1330,9 +1340,9 @@ fn merge_authorization_defaults(
             .unwrap_or_else(default_oidc_logout_path),
         oidc_session_key_file: non_blank_string_value(|settings| &settings.oidc_session_key_file)
             .unwrap_or_else(default_oidc_session_key_file),
-        oidc_session_ttl_seconds: route
-            .and_then(|settings| settings.oidc_session_ttl_seconds)
-            .or_else(|| defaults.and_then(|settings| settings.oidc_session_ttl_seconds))
+        oidc_session_ttl_seconds: layers
+            .iter()
+            .find_map(|settings| settings.oidc_session_ttl_seconds)
             .unwrap_or_else(default_oidc_session_ttl_seconds),
     }))
 }
@@ -1789,6 +1799,59 @@ mod tests {
     }
 
     #[test]
+    fn route_auth_and_http_only_do_not_require_a_path_rule() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+                tcp_passthrough = false
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [defaults.authorization]
+                issuer = "https://auth.example/application/o/root/"
+                audiences = ["root-api"]
+
+                [[routes]]
+                client_id = "http-only"
+                hostname = "http-only.example.com"
+            "#,
+        )
+        .expect("route-wide authorization without path rules");
+
+        assert_eq!(configs[0].backend_rules.len(), 1);
+        assert!(configs[0].authorization.is_some());
+        assert!(!configs[0].tcp_passthrough);
+    }
+
+    #[test]
+    fn route_can_override_the_default_tcp_passthrough_policy() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+                tcp_passthrough = false
+
+                [[routes]]
+                client_id = "http-only"
+                hostname = "http-only.example.com"
+
+                [[routes]]
+                client_id = "raw-tcp"
+                hostname = "raw.example.com"
+                tcp_passthrough = true
+            "#,
+        )
+        .expect("TCP passthrough inheritance and override");
+
+        assert!(!configs[0].tcp_passthrough);
+        assert!(configs[1].tcp_passthrough);
+    }
+
+    #[test]
     fn oidc_client_settings_enable_browser_and_bearer_defaults() {
         let configs = parse_client_configs(
             r#"
@@ -1947,6 +2010,54 @@ mod tests {
 
         assert!(configs[0].authorization.is_some());
         assert!(configs[0].backend_rules[1].authorization.is_none());
+    }
+
+    #[test]
+    fn path_can_enable_auth_and_inherit_fields_through_a_disabled_route() {
+        let configs = parse_client_configs(
+            r#"
+                [defaults]
+                nats_url = "nats://localhost:4222"
+                backend_addr = ":8080"
+
+                [defaults.acme]
+                cache_dir = "~/.cache/lfp-pipe/acme"
+
+                [defaults.authorization]
+                bearer = true
+                issuer = "https://auth.example/application/o/default/"
+                audiences = ["default-api"]
+
+                [[routes]]
+                client_id = "mixed-policy"
+                hostname = "mixed.example.com"
+
+                [routes.authorization]
+                enabled = false
+                required_roles = ["route-users"]
+
+                [[routes.path_routes]]
+                path_prefix = "/protected"
+                backend_addr = ":9999"
+
+                [routes.path_routes.authorization]
+                enabled = true
+                audiences = ["path-api"]
+            "#,
+        )
+        .expect("path authorization resolves all three inheritance layers");
+
+        assert!(configs[0].authorization.is_none());
+        let authorization = configs[0].backend_rules[1]
+            .authorization
+            .as_ref()
+            .expect("path authorization");
+        assert_eq!(
+            authorization.issuer,
+            "https://auth.example/application/o/default/"
+        );
+        assert_eq!(authorization.audiences, ["path-api"]);
+        assert_eq!(authorization.required_roles, ["route-users"]);
     }
 
     #[test]

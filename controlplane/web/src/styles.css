@@ -181,11 +181,12 @@ code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere
 .route-header { padding: 13px 4px; display: grid; grid-template-columns: 25px minmax(0, 1fr) 32px; gap: 10px; align-items: end; }
 .route-node { z-index: 1; width: 25px; height: 25px; margin-bottom: 3px; display: grid; place-items: center; color: var(--color-brand-ink); background: var(--color-brand); border-radius: 7px; }
 .route-body { padding: 4px 4px 16px 39px; display: grid; gap: 12px; }
-.route-transport-options { display: flex; align-items: flex-end; gap: 14px; color: var(--color-muted); font-size: 11px; }
+.route-policy-options { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 24px; }
+.route-policy-warning { margin: 0; padding: 8px 10px; color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 8%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 26%, transparent); border-radius: var(--radius-sm); font-size: 11px; }
 .path-list-heading, .path-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .path-list { display: grid; border-top: 1px solid var(--color-line); }
 .path-config { padding: 12px 0; display: grid; gap: 9px; border-bottom: 1px solid var(--color-line); scroll-margin-block: 72px; }
-.path-fields { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(150px, 1fr) auto; gap: 9px; align-items: start; }
+.path-fields { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(150px, 1fr) auto auto; gap: 9px; align-items: start; }
 .path-fields > .checkbox-field { margin-top: 17px; }
 .checkbox-field { position: relative; min-width: 0; min-height: 30px; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text); font-size: 11px; cursor: pointer; }
 .checkbox-field input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }

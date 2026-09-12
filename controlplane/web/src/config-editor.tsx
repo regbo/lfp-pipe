@@ -8,6 +8,7 @@ import type { IdentityApplication, IdentityGroup, IdentityProvisioningStatus } f
 type Table = Record<string, unknown>;
 type Route = Table & { path_routes?: PathRoute[] };
 type PathRoute = Table & { authorization?: Table };
+type InheritanceMode = "inherit" | "on" | "off";
 
 const asTable = (value: unknown): Table => value && typeof value === "object" && !Array.isArray(value) ? value as Table : {};
 const asRoutes = (value: unknown): Route[] => Array.isArray(value) ? value as Route[] : [];
@@ -19,6 +20,38 @@ const splitList = (value: string) => value.split(",").map((item) => item.trim())
 const blankTextInherits = new Set(["issuer", "jwks_cache_file", "roles_claim", "oidc_client_id", "oidc_callback_path", "oidc_logout_path", "oidc_session_key_file"]);
 const emptyListInherits = new Set(["audiences", "algorithms", "oidc_scopes"]);
 function childTable(parent: Table, key: string): Table { const existing = asTable(parent[key]); parent[key] = existing; return existing; }
+function enabledMode(settings: Table): InheritanceMode { return settings.enabled === undefined ? "inherit" : bool(settings.enabled) ? "on" : "off"; }
+function authorizationState(parent: Table, local: Table) {
+  const hasParent = Object.keys(parent).length > 0;
+  const hasLocalSettings = Object.keys(local).some((key) => key !== "enabled");
+  const mode = local.enabled !== undefined
+    ? enabledMode(local)
+    : hasParent ? "inherit"
+    : hasLocalSettings ? "on"
+    : "inherit";
+  const inherited = hasParent && parent.enabled !== false;
+  return { mode, inherited, enabled: mode === "inherit" ? inherited : mode === "on" };
+}
+function setAuthorizationValue(target: Table, key: string, value: unknown) {
+  const policy = childTable(target, "authorization");
+  const inheritsBlankText = blankTextInherits.has(key)
+    && typeof value === "string" && !value.trim();
+  const inheritsEmptyList = emptyListInherits.has(key)
+    && Array.isArray(value) && value.length === 0;
+  if (value === undefined || inheritsBlankText || inheritsEmptyList) delete policy[key];
+  else policy[key] = value;
+  if (Object.keys(policy).length === 0) delete target.authorization;
+}
+function setAuthorizationEnabled(target: Table, mode: InheritanceMode) {
+  if (mode === "inherit") {
+    const policy = asTable(target.authorization);
+    delete policy.enabled;
+    if (Object.keys(policy).length === 0) delete target.authorization;
+    else target.authorization = policy;
+    return;
+  }
+  childTable(target, "authorization").enabled = mode === "on";
+}
 function revealEditor(selector: string) {
   requestAnimationFrame(() => {
     const target = window.document.querySelector<HTMLElement>(selector);
@@ -81,6 +114,7 @@ export function ConfigEditor({ toml, onChange, provisioning, identityGroups = []
   const authorization = asTable(defaults.authorization);
   const defaultTlsTermination = Object.keys(acme).length > 0 && acme.enabled !== false;
   const defaultAuthorizationEnabled = Object.keys(authorization).length > 0 && authorization.enabled !== false;
+  const defaultTcpPassthrough = bool(defaults.tcp_passthrough, true);
   const routes = asRoutes(document.routes);
   const identityTargets = routes.flatMap((route, routeIndex) => {
     const hostname = text(route.hostname);
@@ -112,24 +146,20 @@ export function ConfigEditor({ toml, onChange, provisioning, identityGroups = []
     if (value.trim()) route[key] = value;
     else delete route[key];
   });
-  const setRouteTlsTermination = (index: number, mode: string) => update((draft) => {
+  const setRouteTlsTermination = (index: number, mode: InheritanceMode) => update((draft) => {
     const route = asRoutes(draft.routes)[index];
     const settings = childTable(route, "acme");
     if (mode === "inherit") delete settings.enabled;
     else settings.enabled = mode === "on";
     if (Object.keys(settings).length === 0) delete route.acme;
   });
+  const setRouteAuthorization = (routeIndex: number, key: string, value: unknown) => update((draft) => {
+    setAuthorizationValue(asRoutes(draft.routes)[routeIndex], key, value);
+  });
   const setPath = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex][key] = value; });
   const setAuthorization = (routeIndex: number, pathIndex: number, key: string, value: unknown) => update((draft) => {
     const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
-    const policy = childTable(target, "authorization");
-    const inheritsBlankText = blankTextInherits.has(key)
-      && typeof value === "string" && !value.trim();
-    const inheritsEmptyList = emptyListInherits.has(key)
-      && Array.isArray(value) && value.length === 0;
-    if (value === undefined || inheritsBlankText || inheritsEmptyList) delete policy[key];
-    else policy[key] = value;
-    if (Object.keys(policy).length === 0) delete target.authorization;
+    setAuthorizationValue(target, key, value);
   });
 
   async function openIdentityProvisioning() {
@@ -206,6 +236,7 @@ export function ConfigEditor({ toml, onChange, provisioning, identityGroups = []
               <SelectField label="Relay mode" value={text(defaults.relay_mode) || "auto"} options={["auto", "buffered", "splice"]} onChange={(value) => setDefault("relay_mode", value)} />
               <NumberField label="Claim acknowledgement" suffix=" ms" value={number(defaults.claim_ack_timeout_ms, 1500)} onChange={(value) => setDefault("claim_ack_timeout_ms", value)} />
             </SimpleGrid>
+            <div className="authorization-scope"><div><strong>TCP passthrough</strong><span>Allow non-HTTP connections to reach host backends.</span></div><SegmentedControl className="inheritance-control" size="xs" value={defaultTcpPassthrough ? "on" : "off"} data={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={(value) => setDefault("tcp_passthrough", value === "on")} /></div>
           </SettingsGroup>
           <SettingsGroup title="Identity">
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
@@ -235,7 +266,7 @@ export function ConfigEditor({ toml, onChange, provisioning, identityGroups = []
     <section className="config-root-section routes-section" aria-labelledby="routes-heading">
       <div className="config-section-heading"><div><h2 id="routes-heading">Public routes</h2><span>{routes.length === 1 ? "1 registered hostname" : `${routes.length} registered hostnames`}</span></div><Button variant="light" leftSection={<Plus size={15} aria-hidden="true" />} type="button" onClick={() => { const nextIndex = routes.length; update((draft) => { const items = asRoutes(draft.routes); items.push({ client_id: `route-${items.length + 1}`, hostname: "", path_routes: [] }); draft.routes = items; }); revealEditor(`[data-route-index="${nextIndex}"]`); }}>Add route</Button></div>
       <div className="route-list">
-        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} defaults={defaults} defaultTlsTermination={defaultTlsTermination} defaultAuthorization={authorization} setRoute={setRoute} setOptionalRoute={setOptionalRoute} setRouteTlsTermination={setRouteTlsTermination} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
+        {routes.map((route, routeIndex) => <RouteEditor key={routeIndex} route={route} routeIndex={routeIndex} defaults={defaults} defaultTlsTermination={defaultTlsTermination} defaultAuthorization={authorization} defaultTcpPassthrough={defaultTcpPassthrough} setRoute={setRoute} setOptionalRoute={setOptionalRoute} setRouteTlsTermination={setRouteTlsTermination} setRouteAuthorization={setRouteAuthorization} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}
         {routes.length === 0 ? <div className="routes-empty"><strong>No routes</strong><span>Add a public hostname to start forwarding traffic.</span></div> : null}
       </div>
     </section>
@@ -260,18 +291,24 @@ type RouteEditorProps = {
   defaults: Table;
   defaultTlsTermination: boolean;
   defaultAuthorization: Table;
+  defaultTcpPassthrough: boolean;
   setRoute: (index: number, key: string, value: unknown) => void;
   setOptionalRoute: (index: number, key: string, value: string) => void;
-  setRouteTlsTermination: (index: number, mode: string) => void;
+  setRouteTlsTermination: (index: number, mode: InheritanceMode) => void;
+  setRouteAuthorization: (route: number, key: string, value: unknown) => void;
   setPath: (route: number, path: number, key: string, value: unknown) => void;
   setAuthorization: (route: number, path: number, key: string, value: unknown) => void;
   update: (mutator: (draft: Table) => void) => void;
 };
 
-function RouteEditor({ route, routeIndex, defaults, defaultTlsTermination, defaultAuthorization, setRoute, setOptionalRoute, setRouteTlsTermination, setPath, setAuthorization, update }: RouteEditorProps) {
+function RouteEditor({ route, routeIndex, defaults, defaultTlsTermination, defaultAuthorization, defaultTcpPassthrough, setRoute, setOptionalRoute, setRouteTlsTermination, setRouteAuthorization, setPath, setAuthorization, update }: RouteEditorProps) {
   const paths = asRoutes(route.path_routes) as PathRoute[];
   const routeAcme = asTable(route.acme);
   const routeAuthorization = asTable(route.authorization);
+  const routeTlsMode = enabledMode(routeAcme);
+  const routeAuth = authorizationState(defaultAuthorization, routeAuthorization);
+  const routeTcpMode: InheritanceMode = route.tcp_passthrough === undefined ? "inherit" : bool(route.tcp_passthrough) ? "on" : "off";
+  const routeTcpPassthrough = routeTcpMode === "inherit" ? defaultTcpPassthrough : routeTcpMode === "on";
   const inheritedAuthorization = { ...defaultAuthorization, ...routeAuthorization };
   const routeName = text(route.hostname) || `Route ${routeIndex + 1}`;
   return <article className="route-config" data-route-index={routeIndex}>
@@ -282,50 +319,42 @@ function RouteEditor({ route, routeIndex, defaults, defaultTlsTermination, defau
         <LinkField label="Plain HTTP backend" value={text(route.http_backend_addr)} placeholder={text(defaults.http_backend_addr)} hrefForValue={backendHref} onChange={(value) => setOptionalRoute(routeIndex, "http_backend_addr", value)} hint="Optional; accepts port, :port, or host:port" />
         <LinkField label="Backend Host override" value={text(route.backend_host)} placeholder={text(defaults.backend_host)} hrefForValue={backendHref} onChange={(value) => setOptionalRoute(routeIndex, "backend_host", value)} hint="Incoming Host is preserved by default" />
       </SimpleGrid>
-      <div className="route-transport-options"><InheritanceControl label="TLS termination" value={routeAcme.enabled === undefined ? "inherit" : bool(routeAcme.enabled) ? "on" : "off"} inherited={defaultTlsTermination ? "On" : "Off"} onChange={(mode) => setRouteTlsTermination(routeIndex, mode)} /><span>Pipe detects plain HTTP automatically; every other connection uses the host backend.</span></div>
+      <div className="route-policy-options">
+        <InheritanceControl label="TLS" value={routeTlsMode} inherited={defaultTlsTermination ? "On" : "Off"} onChange={(mode) => setRouteTlsTermination(routeIndex, mode)} />
+        <InheritanceControl label="Authentication" value={routeAuth.mode} inherited={routeAuth.inherited ? "On" : "Off"} onChange={(mode) => update((draft) => setAuthorizationEnabled(asRoutes(draft.routes)[routeIndex], mode))} />
+        <InheritanceControl label="TCP passthrough" value={routeTcpMode} inherited={defaultTcpPassthrough ? "On" : "Off"} onChange={(mode) => update((draft) => { const target = asRoutes(draft.routes)[routeIndex]; if (mode === "inherit") delete target.tcp_passthrough; else target.tcp_passthrough = mode === "on"; })} />
+      </div>
+      {routeAuth.enabled && routeTcpPassthrough ? <p className="route-policy-warning">TCP passthrough is on; non-HTTP traffic is not covered by authentication.</p> : null}
       <div className="path-list-heading"><strong>Path rules</strong><Button type="button" variant="subtle" leftSection={<Plus size={14} aria-hidden="true" />} onClick={() => { const nextIndex = paths.length; update((draft) => { const routes = asRoutes(draft.routes); const pathRoutes = asRoutes(routes[routeIndex].path_routes); pathRoutes.push({ path_prefix: "/", backend_addr: "8080" }); routes[routeIndex].path_routes = pathRoutes; }); revealEditor(`[data-route-index="${routeIndex}"] [data-path-index="${nextIndex}"]`); }}>Add path</Button></div>
-      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} publicHostname={text(route.hostname)} inheritedAuthorization={inheritedAuthorization} routeIndex={routeIndex} pathIndex={pathIndex} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All paths use this host backend.</p>}
-      <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="route-options"><Accordion.Control>Advanced route settings</Accordion.Control><Accordion.Panel><SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-        <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
-        <InheritanceControl label="Proxy headers" value={route.proxy_headers === undefined ? "inherit" : bool(route.proxy_headers) ? "on" : "off"} inherited={bool(defaults.proxy_headers, true) ? "On" : "Off"} onChange={(mode) => update((draft) => { const target = asRoutes(draft.routes)[routeIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} />
-      </SimpleGrid></Accordion.Panel></Accordion.Item></Accordion>
+      {paths.length > 0 ? <div className="path-list">{paths.map((path, pathIndex) => <PathEditor key={pathIndex} path={path} publicHostname={text(route.hostname)} routeTlsMode={routeTlsMode} defaultTlsTermination={defaultTlsTermination} inheritedAuthorization={inheritedAuthorization} routeIndex={routeIndex} pathIndex={pathIndex} setRouteTlsTermination={setRouteTlsTermination} setPath={setPath} setAuthorization={setAuthorization} update={update} />)}</div> : <p className="route-inheritance">All paths use this host backend.</p>}
+      <Accordion className="route-disclosure" variant="contained"><Accordion.Item value="route-options"><Accordion.Control>{routeAuth.enabled ? "Security and route options" : "Advanced route settings"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          <TextField label="Client ID" value={text(route.client_id)} onChange={(value) => setRoute(routeIndex, "client_id", value)} />
+          <InheritanceControl label="Proxy headers" value={route.proxy_headers === undefined ? "inherit" : bool(route.proxy_headers) ? "on" : "off"} inherited={bool(defaults.proxy_headers, true) ? "On" : "Off"} onChange={(mode) => update((draft) => { const target = asRoutes(draft.routes)[routeIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} />
+        </SimpleGrid>
+        {routeAuth.enabled ? <AuthorizationFields authorization={routeAuthorization} inherited={defaultAuthorization} linkBase={linkHref(text(route.hostname), "https://").replace(/\/+$/, "")} onChange={(key, value) => setRouteAuthorization(routeIndex, key, value)} /> : null}
+      </Stack></Accordion.Panel></Accordion.Item></Accordion>
     </div>
   </article>;
 }
 
-type PathEditorProps = { path: PathRoute; publicHostname: string; inheritedAuthorization: Table; routeIndex: number; pathIndex: number; setPath: RouteEditorProps["setPath"]; setAuthorization: RouteEditorProps["setAuthorization"]; update: RouteEditorProps["update"] };
+type PathEditorProps = { path: PathRoute; publicHostname: string; routeTlsMode: InheritanceMode; defaultTlsTermination: boolean; inheritedAuthorization: Table; routeIndex: number; pathIndex: number; setRouteTlsTermination: RouteEditorProps["setRouteTlsTermination"]; setPath: RouteEditorProps["setPath"]; setAuthorization: RouteEditorProps["setAuthorization"]; update: RouteEditorProps["update"] };
 
-function PathEditor({ path, publicHostname, inheritedAuthorization, routeIndex, pathIndex, setPath, setAuthorization, update }: PathEditorProps) {
+function PathEditor({ path, publicHostname, routeTlsMode, defaultTlsTermination, inheritedAuthorization, routeIndex, pathIndex, setRouteTlsTermination, setPath, setAuthorization, update }: PathEditorProps) {
   const authorization = asTable(path.authorization);
   const publicRouteUrl = linkHref(publicHostname, "https://").replace(/\/+$/, "");
-  const hasInheritedAuthorization = Object.keys(inheritedAuthorization).length > 0;
-  const hasLocalAuthorizationSettings = Object.keys(authorization).some((key) => key !== "enabled");
-  const authorizationMode = authorization.enabled !== undefined
-    ? bool(authorization.enabled) ? "on" : "off"
-    : hasInheritedAuthorization ? "inherit"
-    : hasLocalAuthorizationSettings ? "on"
-    : "inherit";
-  const inheritedProtection = hasInheritedAuthorization && inheritedAuthorization.enabled !== false;
-  const protectedRoute = authorizationMode === "inherit" ? inheritedProtection : authorizationMode === "on";
-  const setAuthorizationMode = (mode: string) => update((draft) => {
+  const pathAuth = authorizationState(inheritedAuthorization, authorization);
+  const setAuthorizationMode = (mode: InheritanceMode) => update((draft) => {
     const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex];
-    if (mode === "inherit") {
-      const policy = asTable(target.authorization);
-      delete policy.enabled;
-      if (Object.keys(policy).length === 0) delete target.authorization;
-      else target.authorization = policy;
-      return;
-    }
-    const policy = childTable(target, "authorization");
-    policy.enabled = mode === "on";
+    setAuthorizationEnabled(target, mode);
   });
   return <div className="path-config" data-path-index={pathIndex}>
     <div className="path-header"><strong>Path {pathIndex + 1}</strong><ActionIcon type="button" color="red" variant="subtle" title={`Remove path ${pathIndex + 1}`} aria-label={`Remove path ${pathIndex + 1}`} onClick={() => update((draft) => { asRoutes(asRoutes(draft.routes)[routeIndex].path_routes).splice(pathIndex, 1); })}><Trash2 size={15} aria-hidden="true" /></ActionIcon></div>
-    <div className="path-fields"><LinkField className="path-field" label="Path" value={text(path.path_prefix)} defaultScheme={publicRouteUrl} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><LinkField className="path-field" label="Backend" value={text(path.backend_addr)} hrefForValue={backendHref} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" /><InheritanceControl label="Protection" value={authorizationMode} inherited={inheritedProtection ? "On" : "Off"} onChange={setAuthorizationMode} /></div>
-    <Accordion className="route-disclosure path-disclosure" variant="contained"><Accordion.Item value="path-options"><Accordion.Control>{protectedRoute ? "Security and request options" : "Request options"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
+    <div className="path-fields"><LinkField className="path-field" label="Path" value={text(path.path_prefix)} defaultScheme={publicRouteUrl} onChange={(value) => setPath(routeIndex, pathIndex, "path_prefix", value)} /><LinkField className="path-field" label="Backend" value={text(path.backend_addr)} hrefForValue={backendHref} onChange={(value) => setPath(routeIndex, pathIndex, "backend_addr", value)} hint="Bare port, :port for localhost, or host:port" /><InheritanceControl label="TLS (hostname)" value={routeTlsMode} inherited={defaultTlsTermination ? "On" : "Off"} onChange={(mode) => setRouteTlsTermination(routeIndex, mode)} /><InheritanceControl label="Authentication" value={pathAuth.mode} inherited={pathAuth.inherited ? "On" : "Off"} onChange={setAuthorizationMode} /></div>
+    <Accordion className="route-disclosure path-disclosure" variant="contained"><Accordion.Item value="path-options"><Accordion.Control>{pathAuth.enabled ? "Security and request options" : "Request options"}</Accordion.Control><Accordion.Panel><Stack gap="sm">
       <div className="request-options"><LinkField label="Backend Host header" value={text(path.backend_host)} hrefForValue={backendHref} onChange={(value) => setPath(routeIndex, pathIndex, "backend_host", value)} /><Group className="request-option-toggles" gap="xl"><CheckboxField label="Strip path prefix" checked={bool(path.strip_path_prefix)} onChange={(value) => setPath(routeIndex, pathIndex, "strip_path_prefix", value)} /><InheritanceControl label="Proxy headers" value={path.proxy_headers === undefined ? "inherit" : bool(path.proxy_headers) ? "on" : "off"} inherited="Route default" onChange={(mode) => update((draft) => { const target = asRoutes(asRoutes(draft.routes)[routeIndex].path_routes)[pathIndex]; if (mode === "inherit") delete target.proxy_headers; else target.proxy_headers = mode === "on"; })} /></Group></div>
-      {authorizationMode === "inherit" ? <div className="inherited-policy"><span className="inheritance-dot" aria-hidden="true" />{inheritedProtection ? "Protection is inherited. Authentication methods and fields can still be overridden here." : "Public access is inherited."}</div> : null}
-      {protectedRoute ? <AuthorizationFields authorization={authorization} inherited={inheritedAuthorization} linkBase={publicRouteUrl} onChange={(key, value) => setAuthorization(routeIndex, pathIndex, key, value)} /> : null}
+      {pathAuth.mode === "inherit" ? <div className="inherited-policy"><span className="inheritance-dot" aria-hidden="true" />{pathAuth.inherited ? "Authentication is inherited; methods and fields can still be overridden here." : "Public access is inherited."}</div> : null}
+      {pathAuth.enabled ? <AuthorizationFields authorization={authorization} inherited={inheritedAuthorization} linkBase={publicRouteUrl} onChange={(key, value) => setAuthorization(routeIndex, pathIndex, key, value)} /> : null}
     </Stack></Accordion.Panel></Accordion.Item></Accordion>
   </div>;
 }
@@ -364,8 +393,8 @@ function AuthorizationFields({ authorization, inherited = {}, linkBase = "", onC
   </div>;
 }
 
-function InheritanceControl({ label, value, inherited, onChange }: { label: string; value: string; inherited: string; onChange: (value: string) => void }) {
-  return <div className="inheritance-field"><span className="inheritance-label">{label}</span><SegmentedControl className="inheritance-control" size="xs" value={value} data={[{ value: "inherit", label: "Inherit" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={onChange} /><span className="inheritance-value">{value === "inherit" ? `Inherited: ${inherited}` : "Explicit override"}</span></div>;
+function InheritanceControl({ label, value, inherited, onChange }: { label: string; value: InheritanceMode; inherited: string; onChange: (value: InheritanceMode) => void }) {
+  return <div className="inheritance-field"><span className="inheritance-label">{label}</span><SegmentedControl className="inheritance-control" size="xs" value={value} data={[{ value: "inherit", label: "Inherit" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={(next) => onChange(next as InheritanceMode)} /><span className="inheritance-value">{value === "inherit" ? `Inherited: ${inherited}` : "Explicit override"}</span></div>;
 }
 
 type TextFieldProps = { label: string; value: string; onChange: (value: string) => void; hint?: string; className?: string; placeholder?: string };

@@ -243,6 +243,13 @@ the forwarding-header behavior for a specific route. A private service can use
 Only HTTP/1.1 is advertised on the locally terminated TLS connection. Inspected
 traffic uses a request-level proxy so keep-alive requests are routed and
 authorized independently; HTTP upgrades such as WebSockets remain supported.
+A route-level `[routes.authorization]` policy protects the hostname fallback
+backend directly; no `[[routes.path_routes]]` entry is required. Set
+`tcp_passthrough = false` on the route or in `[defaults]` to make that tunnel
+HTTP-only. The Rust client then closes non-HTTP connections before dialing the
+private backend, including non-HTTP protocols received after local TLS
+termination. Leave TCP passthrough enabled only for routes that intentionally
+publish a raw TCP service.
 A path route can have its own `[routes.path_routes.authorization]` policy. The
 bearer header is removed before forwarding by default; set
 `forward_authorization = true` only when the private backend must receive it.

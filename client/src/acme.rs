@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
-use crate::{BackendRuntime, http_proxy};
+use crate::{BackendRuntime, http_proxy, protocol_allowed};
 
 /// Cloneable ingress handle owned by request-processing tasks.
 #[derive(Clone)]
@@ -116,6 +116,7 @@ impl AcmeRuntime {
         config: ClientAcmeConfig,
         backends: Arc<Vec<BackendRuntime>>,
         relay_mode: RelayMode,
+        tcp_passthrough: bool,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !matches!(relay_mode, RelayMode::Splice),
@@ -126,7 +127,9 @@ impl AcmeRuntime {
         prepare_cache_dir(&cache_dir)?;
         let (sender, receiver) = mpsc::channel(64);
         let task = tokio::spawn(async move {
-            if let Err(error) = run_acme(config, cache_dir, backends, receiver).await {
+            if let Err(error) =
+                run_acme(config, cache_dir, backends, receiver, tcp_passthrough).await
+            {
                 warn!(?error, "ACME TLS runtime stopped");
             }
         });
@@ -157,6 +160,7 @@ async fn run_acme(
     cache_dir: PathBuf,
     backends: Arc<Vec<BackendRuntime>>,
     receiver: mpsc::Receiver<(TcpStream, Option<String>)>,
+    tcp_passthrough: bool,
 ) -> anyhow::Result<()> {
     let mut acme = AcmeConfig::new([&config.domain]).contact(config.contacts.iter());
     acme = if let Some(directory_url) = config.directory_url.as_deref() {
@@ -184,7 +188,9 @@ async fn run_acme(
                 let domain = config.domain.clone();
                 let client_ip = tls_stream.get_ref().get_ref().0.get_ref().client_ip.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = bridge_tls(tls_stream, &domain, client_ip, backends).await {
+                    if let Err(error) =
+                        bridge_tls(tls_stream, &domain, client_ip, backends, tcp_passthrough).await
+                    {
                         warn!(?error, domain = %domain, "ACME TLS relay failed");
                     }
                 });
@@ -201,6 +207,7 @@ async fn bridge_tls<T>(
     hostname: &str,
     client_ip: Option<String>,
     backends: Arc<Vec<BackendRuntime>>,
+    tcp_passthrough: bool,
 ) -> anyhow::Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -211,12 +218,13 @@ where
             backend.matches_hostname(Some(hostname)) && backend.rule.path_prefix.is_none()
         })
         .context("matching route has no fallback backend")?;
-    let inspect_http = backends.iter().any(|backend| {
-        backend.rule.path_prefix.is_some()
-            || backend.rule.proxy_headers
-            || backend.rule.backend_host.is_some()
-            || backend.authorization.is_some()
-    });
+    let inspect_http = !tcp_passthrough
+        || backends.iter().any(|backend| {
+            backend.rule.path_prefix.is_some()
+                || backend.rule.proxy_headers
+                || backend.rule.backend_host.is_some()
+                || backend.authorization.is_some()
+        });
     let mut tls_stream = BufReader::new(tls_stream);
     let http = if inspect_http {
         match timeout(Duration::from_secs(2), tls_stream.fill_buf()).await {
@@ -227,6 +235,13 @@ where
     } else {
         false
     };
+    if !protocol_allowed(http, tcp_passthrough) {
+        debug!(
+            hostname,
+            "rejected non-HTTP connection because TCP passthrough is disabled"
+        );
+        return Ok(());
+    }
     if !http {
         let backend_addr = fallback.rule.resolved_backend_addr();
         let mut backend_stream = TcpStream::connect(&backend_addr)
@@ -323,6 +338,7 @@ mod tests {
                 authorization: None,
             }]),
             RelayMode::Splice,
+            true,
         )
         .err()
         .expect("splice must fail");

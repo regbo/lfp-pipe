@@ -1,9 +1,10 @@
-# A protected route has three independent concerns: tunnel credential
-# acquisition, TLS termination, and caller authorization.
+# A protected route keeps tunnel credentials, TLS termination, caller
+# authorization, and raw TCP exposure independent.
 [defaults]
 nats_url = "tls://nats-pipe.example.com:443"
 relay_mode = "auto"
 backend_addr = "127.0.0.1:8080"
+tcp_passthrough = false
 
 # Machine credentials used only to obtain the route-scoped NATS ticket.
 [defaults.oauth]
